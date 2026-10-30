@@ -54,6 +54,7 @@ import {
 import { McpError, formatError } from "../utils/errors.js";
 import { TOOL_SCHEMAS } from "./schemas.js";
 import { assertToolAllowed } from "./capabilities.js";
+import { runSetupChecks } from "../setup/checks.js";
 
 /**
  * Format a ZodError into a user-friendly error response.
@@ -92,6 +93,10 @@ export async function handleToolCall(
     assertToolAllowed(name);
 
     switch (name) {
+      case "check_setup":
+        validateArgs(name, args);
+        result = await runSetupChecks();
+        break;
       case "list_subscriptions":
         validateArgs(name, args);
         result = await listSubscriptions();
@@ -324,8 +329,15 @@ export async function handleToolCall(
         isError: true,
       };
     }
+    const formatted = formatError(error);
+    if (formatted.error.code === "AuthenticationError") {
+      const msg = formatted.error.message.trimEnd();
+      formatted.error.message =
+        `${msg}${/[.!?]$/.test(msg) ? "" : "."} ` +
+        "Call the check_setup tool to diagnose the server's Azure login and configuration.";
+    }
     return {
-      content: [{ type: "text", text: JSON.stringify(formatError(error)) }],
+      content: [{ type: "text", text: JSON.stringify(formatted) }],
       isError: true,
     };
   }

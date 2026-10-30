@@ -425,6 +425,7 @@ export const getWorkflowInstructionsSchema = z.object({
 // ============================================================================
 
 export const TOOL_SCHEMAS: Record<string, z.ZodSchema> = {
+  check_setup: listSubscriptionsSchema,
   list_subscriptions: listSubscriptionsSchema,
   list_logic_apps: listLogicAppsSchema,
   list_workflows: listWorkflowsSchema,

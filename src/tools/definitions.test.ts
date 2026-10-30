@@ -21,8 +21,8 @@ describe("tool definitions", () => {
     }
   });
 
-  it("should have all 42 tools with unique names and required schema properties", () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(42);
+  it("should have all 43 tools with unique names and required schema properties", () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(43);
     
     const names = TOOL_DEFINITIONS.map((t) => t.name);
     const uniqueNames = new Set(names);

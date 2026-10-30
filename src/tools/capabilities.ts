@@ -55,6 +55,7 @@ const LOCAL_READ: ToolPolicy = {
  */
 export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   // Discovery / definitions
+  check_setup: READ,
   list_subscriptions: READ,
   list_logic_apps: READ,
   list_workflows: READ,

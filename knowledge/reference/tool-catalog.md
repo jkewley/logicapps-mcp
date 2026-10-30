@@ -5,7 +5,7 @@ lastUpdated: 2026-02-01
 
 # Tool Catalog
 
-Complete reference for all 42 MCP tools available in `logicapps-mcp`.
+Complete reference for all 43 MCP tools available in `logicapps-mcp`.
 
 ## Capabilities (read-only by default)
 
@@ -34,6 +34,27 @@ Most tools work with both **Consumption** and **Standard** Logic Apps. Key diffe
 | `workflowName` | **Omit** (Logic App = workflow) | **Required** (Logic App contains multiple workflows) |
 
 When you see `workflowName` marked as "Standard only" - it's required for Standard, ignored for Consumption.
+
+---
+
+## Setup Tools
+
+### check_setup
+
+Diagnose the server's own setup.
+
+**When:** Any tool fails with `AuthenticationError`; user asks why nothing works, which account
+is used, or how to enable write operations.
+
+**Parameters:** None.
+
+**Returns:** `ok`, `authMode` (`azure-cli` or `passthrough`), `summary`, and `checks[]` with
+`status` (`pass`/`warn`/`fail`/`skip`), `message`, `remediation` for: configuration,
+capabilities, Azure CLI installed, Azure CLI login (tenant/cloud mismatch), ARM token,
+subscription access.
+
+**Tip:** Relay `remediation` steps verbatim (e.g. "run `az login`"). After the user fixes
+login, retry the original tool — no restart needed (installing Azure CLI does need a client restart).
 
 ---
 
@@ -651,6 +672,7 @@ Get Standard Logic App host status.
 
 | I want to... | Use |
 |--------------|-----|
+| Diagnose login/config problems | `check_setup` |
 | Find Logic Apps | `list_logic_apps` |
 | See workflow definition | `get_workflow_definition` |
 | Create a workflow | `create_workflow` |

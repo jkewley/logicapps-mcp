@@ -28,6 +28,14 @@ export function setSettings(settings: LogicAppsMcpSettings): void {
   cachedSettings = settings;
 }
 
+export function getSettings(): LogicAppsMcpSettings | null {
+  return cachedSettings;
+}
+
+export function isAzureCliAuthEnabled(): boolean {
+  return azureCliEnabled;
+}
+
 /**
  * Sets a process-wide passthrough token. Prefer runWithToken for servers
  * that handle concurrent requests.

@@ -27,8 +27,9 @@ Works with **GitHub Copilot**, **Claude Desktop**, or any MCP-compatible AI clie
 # 1. Install
 npm install -g logicapps-mcp
 
-# 2. Login to Azure
+# 2. Login to Azure, then verify the setup
 az login
+logicapps-mcp --check
 
 # 3. Configure your AI assistant (example for VS Code)
 ```
@@ -70,8 +71,9 @@ Capabilities: `execute` (run/resubmit/cancel), `write` (create/update/delete/ena
 
 ## Features
 
-- **42 Tools** for Logic Apps operations: list, debug, document, create, update, delete workflows
+- **43 Tools** for Logic Apps operations: list, debug, document, create, update, delete workflows
 - **Safe by default**: read-only unless you opt in to `execute`, `write`, `connector` or `secrets`
+- **Setup diagnostics**: `--check` and the `check_setup` tool report missing `az login`, tenant/cloud mismatches, config errors and access problems with fixes
 - **Dual SKU Support**: Works with both Consumption and Standard Logic Apps
 - **Run Debugging**: Trace failures through actions, loops (per-iteration I/O), and scopes
 - **Failure Analysis**: `analyze_run_failures` groups recurring failures by root-cause action and error code
@@ -94,7 +96,7 @@ Capabilities: `execute` (run/resubmit/cancel), `write` (create/update/delete/ena
 ## Documentation
 
 - [Getting Started Guide](docs/GETTING_STARTED.md) - Setup for Claude, Copilot, Cloud MCP Server
-- [Available Tools](docs/TOOLS.md) - All 42 tools with descriptions and required capabilities
+- [Available Tools](docs/TOOLS.md) - All 43 tools with descriptions and required capabilities
 - [Configuration](docs/CONFIGURATION.md) - Environment variables, auth, SKU differences
 - [Changelog](CHANGELOG.md) - Release history
 
