@@ -4,8 +4,10 @@
 
 import {
   armRequest,
+  armRequestAllPages,
   armRequestVoid,
   workflowMgmtRequest,
+  workflowMgmtRequestAllPages,
 } from "../utils/http.js";
 import { WorkflowRun, RunAction, ConsumptionLogicApp } from "../types/logicApp.js";
 import { McpError } from "../utils/errors.js";
@@ -41,14 +43,162 @@ export interface GetRunDetailsResult {
     status: string;
     startTime: string;
     endTime?: string;
+    durationMs?: number;
+    code?: string;
     trigger: {
       name: string;
+      status?: string;
+      code?: string;
+      startTime?: string;
+      endTime?: string;
+      scheduledTime?: string;
+      hasInputs: boolean;
+      hasOutputs: boolean;
+      trackedProperties?: Record<string, unknown>;
     };
+    /** Workflow version that executed this run (Consumption: version id). */
+    workflowVersion?: string;
+    correlation?: {
+      clientTrackingId?: string;
+    };
+    /** Names of workflow-level outputs produced by the run (values via get_action_io / extract_run_test_data). */
+    outputNames?: string[];
     error?: {
       code: string;
       message: string;
     };
     portalUrl?: string;
+  };
+}
+
+// ============================================================================
+// Shared run access helpers (used by diagnostics and test-data tools)
+// ============================================================================
+
+export interface RunTarget {
+  sku: "consumption" | "standard";
+  subscriptionId: string;
+  resourceGroupName: string;
+  logicAppName: string;
+  workflowName?: string;
+  hostname?: string;
+  masterKey?: string;
+}
+
+/**
+ * Resolve SKU and (for Standard) management API access for run operations.
+ */
+export async function resolveRunTarget(
+  subscriptionId: string,
+  resourceGroupName: string,
+  logicAppName: string,
+  workflowName?: string
+): Promise<RunTarget> {
+  const sku = await detectLogicAppSku(subscriptionId, resourceGroupName, logicAppName);
+  if (sku === "consumption") {
+    return { sku, subscriptionId, resourceGroupName, logicAppName };
+  }
+  if (!workflowName) {
+    throw new McpError("InvalidParameter", "workflowName is required for Standard Logic Apps");
+  }
+  const { hostname, masterKey } = await getStandardAppAccess(
+    subscriptionId,
+    resourceGroupName,
+    logicAppName
+  );
+  return { sku, subscriptionId, resourceGroupName, logicAppName, workflowName, hostname, masterKey };
+}
+
+function consumptionWorkflowPath(t: RunTarget): string {
+  return `/subscriptions/${t.subscriptionId}/resourceGroups/${t.resourceGroupName}/providers/Microsoft.Logic/workflows/${t.logicAppName}`;
+}
+
+function standardWorkflowPath(t: RunTarget): string {
+  return `/runtime/webhooks/workflow/api/management/workflows/${t.workflowName}`;
+}
+
+const STANDARD_API = "api-version=2020-05-01-preview";
+
+export async function fetchRunRaw(t: RunTarget, runId: string): Promise<WorkflowRun> {
+  if (t.sku === "consumption") {
+    return armRequest<WorkflowRun>(`${consumptionWorkflowPath(t)}/runs/${runId}`, {
+      queryParams: { "api-version": "2019-05-01" },
+    });
+  }
+  return workflowMgmtRequest<WorkflowRun>(
+    t.hostname!,
+    `${standardWorkflowPath(t)}/runs/${runId}?${STANDARD_API}`,
+    t.masterKey!
+  );
+}
+
+export async function fetchRunActionsRaw(t: RunTarget, runId: string): Promise<RunAction[]> {
+  if (t.sku === "consumption") {
+    return armRequestAllPages<RunAction>(`${consumptionWorkflowPath(t)}/runs/${runId}/actions`, {
+      "api-version": "2019-05-01",
+    });
+  }
+  return workflowMgmtRequestAllPages<RunAction>(
+    t.hostname!,
+    `${standardWorkflowPath(t)}/runs/${runId}/actions?${STANDARD_API}`,
+    t.masterKey!
+  );
+}
+
+/**
+ * Fetch a run action, or a specific repetition (loop iteration) of it.
+ */
+export async function fetchActionRaw(
+  t: RunTarget,
+  runId: string,
+  actionName: string,
+  repetitionName?: string
+): Promise<RunAction> {
+  const suffix = `/runs/${runId}/actions/${actionName}${repetitionName ? `/repetitions/${repetitionName}` : ""}`;
+  if (t.sku === "consumption") {
+    return armRequest<RunAction>(`${consumptionWorkflowPath(t)}${suffix}`, {
+      queryParams: { "api-version": "2019-05-01" },
+    });
+  }
+  return workflowMgmtRequest<RunAction>(
+    t.hostname!,
+    `${standardWorkflowPath(t)}${suffix}?${STANDARD_API}`,
+    t.masterKey!
+  );
+}
+
+function durationMs(start?: string, end?: string): number | undefined {
+  if (!start || !end) return undefined;
+  const ms = Date.parse(end) - Date.parse(start);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function toRunDetails(run: WorkflowRun, portalUrl: string): GetRunDetailsResult["run"] {
+  const p = run.properties;
+  return {
+    id: run.id,
+    name: run.name,
+    status: p.status,
+    startTime: p.startTime,
+    endTime: p.endTime,
+    durationMs: durationMs(p.startTime, p.endTime),
+    code: p.code,
+    trigger: {
+      name: p.trigger?.name ?? "unknown",
+      status: p.trigger?.status,
+      code: p.trigger?.code,
+      startTime: p.trigger?.startTime,
+      endTime: p.trigger?.endTime,
+      scheduledTime: p.trigger?.scheduledTime,
+      hasInputs: Boolean(p.trigger?.inputsLink?.uri),
+      hasOutputs: Boolean(p.trigger?.outputsLink?.uri),
+      trackedProperties: p.trigger?.trackedProperties,
+    },
+    workflowVersion: p.workflow?.name,
+    correlation: p.correlation ?? p.trigger?.correlation,
+    outputNames: p.outputs ? Object.keys(p.outputs) : undefined,
+    error: p.error,
+    portalUrl,
   };
 }
 
@@ -65,7 +215,6 @@ export interface GetRunActionsResult {
     };
     trackedProperties?: Record<string, unknown>;
   }>;
-  nextLink?: string;
 }
 
 export async function listRunHistory(
@@ -182,66 +331,33 @@ export async function getRunDetails(
       `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}`,
       { queryParams: { "api-version": "2019-05-01" } }
     );
-    const location = logicApp.location;
-
-    const run = await armRequest<WorkflowRun>(
-      `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/runs/${runId}`,
-      { queryParams: { "api-version": "2019-05-01" } }
+    const run = await fetchRunRaw(
+      { sku, subscriptionId, resourceGroupName, logicAppName },
+      runId
     );
 
     return {
-      run: {
-        id: run.id,
-        name: run.name,
-        status: run.properties.status,
-        startTime: run.properties.startTime,
-        endTime: run.properties.endTime,
-        trigger: { name: run.properties.trigger?.name ?? "unknown" },
-        error: run.properties.error,
-        portalUrl: getConsumptionRunPortalUrl(
+      run: toRunDetails(
+        run,
+        getConsumptionRunPortalUrl(
           subscriptionId,
           resourceGroupName,
           logicAppName,
           run.name,
-          location
-        ),
-      },
+          logicApp.location
+        )
+      ),
     };
   }
 
-  // Standard
-  if (!workflowName) {
-    throw new McpError("InvalidParameter", "workflowName is required for Standard Logic Apps");
-  }
-
-  const { hostname, masterKey } = await getStandardAppAccess(
-    subscriptionId,
-    resourceGroupName,
-    logicAppName
-  );
-  const run = await workflowMgmtRequest<WorkflowRun>(
-    hostname,
-    `/runtime/webhooks/workflow/api/management/workflows/${workflowName}/runs/${runId}?api-version=2020-05-01-preview`,
-    masterKey
-  );
+  const target = await resolveRunTarget(subscriptionId, resourceGroupName, logicAppName, workflowName);
+  const run = await fetchRunRaw(target, runId);
 
   return {
-    run: {
-      id: run.id,
-      name: run.name,
-      status: run.properties.status,
-      startTime: run.properties.startTime,
-      endTime: run.properties.endTime,
-      trigger: { name: run.properties.trigger?.name ?? "unknown" },
-      error: run.properties.error,
-      portalUrl: getStandardRunPortalUrl(
-        subscriptionId,
-        resourceGroupName,
-        logicAppName,
-        workflowName,
-        run.name
-      ),
-    },
+    run: toRunDetails(
+      run,
+      getStandardRunPortalUrl(subscriptionId, resourceGroupName, logicAppName, workflowName!, run.name)
+    ),
   };
 }
 
@@ -309,11 +425,7 @@ async function getRunActionsConsumption(
     };
   }
 
-  const response = await armRequest<{ value: RunAction[]; nextLink?: string }>(basePath, {
-    queryParams: { "api-version": "2019-05-01" },
-  });
-
-  const actions = response.value ?? [];
+  const actions = await armRequestAllPages<RunAction>(basePath, { "api-version": "2019-05-01" });
 
   return {
     actions: actions.map((action) => ({
@@ -325,7 +437,6 @@ async function getRunActionsConsumption(
       error: action.properties.error,
       trackedProperties: action.properties.trackedProperties,
     })),
-    nextLink: response.nextLink,
   };
 }
 
@@ -366,14 +477,11 @@ async function getRunActionsStandard(
     };
   }
 
-  // Use single-page request - return nextLink for caller-controlled pagination
-  const response = await workflowMgmtRequest<{ value: RunAction[]; nextLink?: string }>(
+  const actionsList = await workflowMgmtRequestAllPages<RunAction>(
     hostname,
     `${basePath}?api-version=2020-05-01-preview`,
     masterKey
   );
-
-  const actionsList = response.value ?? [];
 
   return {
     actions: actionsList.map((action) => ({
@@ -385,18 +493,19 @@ async function getRunActionsStandard(
       error: action.properties.error,
       trackedProperties: action.properties.trackedProperties,
     })),
-    nextLink: response.nextLink,
   };
 }
 
 export interface GetActionIOResult {
   actionName: string;
+  repetitionName?: string;
+  status?: string;
   inputs?: unknown;
   outputs?: unknown;
 }
 
 /**
- * Get the actual input/output content for a run action.
+ * Get the actual input/output content for a run action (or one loop iteration of it).
  * Follows the inputsLink/outputsLink URLs to fetch the content.
  */
 export async function getActionIO(
@@ -406,42 +515,22 @@ export async function getActionIO(
   runId: string,
   actionName: string,
   workflowName?: string,
-  type: "inputs" | "outputs" | "both" = "both"
+  type: "inputs" | "outputs" | "both" = "both",
+  repetitionName?: string
 ): Promise<GetActionIOResult> {
-  const sku = await detectLogicAppSku(subscriptionId, resourceGroupName, logicAppName);
+  const target = await resolveRunTarget(subscriptionId, resourceGroupName, logicAppName, workflowName);
+  const action = await fetchActionRaw(target, runId, actionName, repetitionName);
 
-  let action: RunAction;
+  const result: GetActionIOResult = {
+    actionName,
+    ...(repetitionName ? { repetitionName } : {}),
+    status: action.properties.status,
+  };
 
-  if (sku === "consumption") {
-    action = await armRequest<RunAction>(
-      `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/runs/${runId}/actions/${actionName}`,
-      { queryParams: { "api-version": "2019-05-01" } }
-    );
-  } else {
-    if (!workflowName) {
-      throw new McpError("InvalidParameter", "workflowName is required for Standard Logic Apps");
-    }
-
-    const { hostname, masterKey } = await getStandardAppAccess(
-      subscriptionId,
-      resourceGroupName,
-      logicAppName
-    );
-    action = await workflowMgmtRequest<RunAction>(
-      hostname,
-      `/runtime/webhooks/workflow/api/management/workflows/${workflowName}/runs/${runId}/actions/${actionName}?api-version=2020-05-01-preview`,
-      masterKey
-    );
-  }
-
-  const result: GetActionIOResult = { actionName };
-
-  // Fetch inputs if requested
   if ((type === "inputs" || type === "both") && action.properties.inputsLink?.uri) {
     result.inputs = await fetchContentLink(action.properties.inputsLink.uri);
   }
 
-  // Fetch outputs if requested
   if ((type === "outputs" || type === "both") && action.properties.outputsLink?.uri) {
     result.outputs = await fetchContentLink(action.properties.outputsLink.uri);
   }
@@ -453,7 +542,7 @@ export async function getActionIO(
  * Fetch content from an inputsLink/outputsLink URL.
  * These URLs include SAS tokens so no additional auth is needed.
  */
-async function fetchContentLink(url: string): Promise<unknown> {
+export async function fetchContentLink(url: string): Promise<unknown> {
   const TIMEOUT_MS = 30000; // 30 second timeout
   const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB limit
 
@@ -524,6 +613,21 @@ export interface SearchRunsResult {
   }>;
   count: number;
   nextLink?: string;
+  /** Pass as skipToken to continue a search (including clientTrackingId searches). */
+  skipToken?: string;
+  /** Number of run-history pages scanned (clientTrackingId searches only). */
+  pagesScanned?: number;
+  /** True when more history exists beyond what was scanned. */
+  hasMore?: boolean;
+}
+
+function extractSkipToken(nextLink: string | undefined): string | undefined {
+  if (!nextLink) return undefined;
+  try {
+    return new URL(nextLink).searchParams.get("$skiptoken") ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -560,14 +664,15 @@ export async function searchRuns(
   // If clientTrackingId is provided, we need to handle pagination specially
   // because the API doesn't support filtering by clientTrackingId server-side
   if (clientTrackingId) {
-    // Fetch pages until we have enough matching results or run out of pages
+    // Scan whole pages until we have enough matches, run out of pages, or hit the
+    // scan limit. Whole pages are consumed so the returned skipToken resumes exactly.
     const matchingRuns: SearchRunsResult["runs"] = [];
     let currentSkipToken = skipToken;
-    const maxIterations = 10; // Safety limit to prevent infinite loops
-    let iterations = 0;
+    const maxPages = 10; // Safety limit per call; callers continue with skipToken
+    let pagesScanned = 0;
 
-    while (matchingRuns.length < top && iterations < maxIterations) {
-      iterations++;
+    while (matchingRuns.length < top && pagesScanned < maxPages) {
+      pagesScanned++;
 
       const pageResult = await listRunHistory(
         subscriptionId,
@@ -579,27 +684,22 @@ export async function searchRuns(
         currentSkipToken
       );
 
-      // Filter this page for matching clientTrackingId
-      const matching = pageResult.runs.filter(
-        (run) => run.correlation?.clientTrackingId === clientTrackingId
+      matchingRuns.push(
+        ...pageResult.runs.filter((run) => run.correlation?.clientTrackingId === clientTrackingId)
       );
-      matchingRuns.push(...matching);
 
-      // If no more pages, stop
-      if (!pageResult.nextLink) {
+      currentSkipToken = extractSkipToken(pageResult.nextLink);
+      if (!currentSkipToken) {
         break;
       }
-
-      // Extract skipToken from nextLink for next iteration
-      const nextLinkUrl = new URL(pageResult.nextLink);
-      currentSkipToken = nextLinkUrl.searchParams.get("$skiptoken") ?? undefined;
     }
 
     return {
-      runs: matchingRuns.slice(0, top),
-      count: Math.min(matchingRuns.length, top),
-      // Cannot provide valid nextLink for client-side filtered results
-      nextLink: undefined,
+      runs: matchingRuns,
+      count: matchingRuns.length,
+      skipToken: currentSkipToken,
+      pagesScanned,
+      hasMore: currentSkipToken !== undefined,
     };
   }
 
@@ -614,10 +714,13 @@ export async function searchRuns(
     skipToken
   );
 
+  const nextSkipToken = extractSkipToken(result.nextLink);
   return {
     runs: result.runs,
     count: result.runs.length,
     nextLink: result.nextLink,
+    skipToken: nextSkipToken,
+    hasMore: nextSkipToken !== undefined,
   };
 }
 
@@ -647,7 +750,7 @@ export async function cancelRun(
   if (sku === "consumption") {
     await armRequestVoid(
       `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/runs/${runId}/cancel`,
-      { method: "POST", queryParams: { "api-version": "2019-05-01" } }
+      { method: "POST", queryParams: { "api-version": "2019-05-01" }, idempotent: true }
     );
 
     return {
@@ -665,7 +768,7 @@ export async function cancelRun(
   // For Standard, use the ARM API with hostruntime path
   await armRequestVoid(
     `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Web/sites/${logicAppName}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/runs/${runId}/cancel`,
-    { method: "POST", queryParams: { "api-version": "2022-03-01" } }
+    { method: "POST", queryParams: { "api-version": "2022-03-01" }, idempotent: true }
   );
 
   return {

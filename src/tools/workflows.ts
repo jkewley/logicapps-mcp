@@ -6,6 +6,7 @@ import {
   armRequest,
   armRequestVoid,
   vfsRequest,
+  vfsReadJson,
   workflowMgmtRequest,
 } from "../utils/http.js";
 import {
@@ -317,7 +318,7 @@ async function updateStandardWorkflowFlowState(
   // First, get current app settings
   const currentSettings = await armRequest<AppSettingsResponse>(
     `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Web/sites/${logicAppName}/config/appsettings/list`,
-    { method: "POST", queryParams: { "api-version": "2023-01-01" } }
+    { method: "POST", queryParams: { "api-version": "2023-01-01" }, idempotent: true }
   );
 
   const properties = { ...currentSettings.properties };
@@ -366,7 +367,7 @@ export async function enableWorkflow(
   if (sku === "consumption") {
     await armRequestVoid(
       `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/enable`,
-      { method: "POST", queryParams: { "api-version": "2019-05-01" } }
+      { method: "POST", queryParams: { "api-version": "2019-05-01" }, idempotent: true }
     );
 
     return {
@@ -414,7 +415,7 @@ export async function disableWorkflow(
   if (sku === "consumption") {
     await armRequestVoid(
       `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/disable`,
-      { method: "POST", queryParams: { "api-version": "2019-05-01" } }
+      { method: "POST", queryParams: { "api-version": "2019-05-01" }, idempotent: true }
     );
 
     return {
@@ -467,24 +468,46 @@ export async function createWorkflow(
   location?: string,
   workflowName?: string,
   kind?: string,
-  connections?: Record<string, ConnectionReference>
+  connections?: Record<string, ConnectionReference>,
+  state?: "Enabled" | "Disabled"
 ): Promise<CreateWorkflowResult> {
-  // Try to detect if this is an existing Standard app
-  let sku: "consumption" | "standard" = "consumption";
+  // Detect whether the target resource already exists (and its SKU)
+  let sku: "consumption" | "standard" | undefined;
   try {
     sku = await detectLogicAppSku(subscriptionId, resourceGroupName, logicAppName);
   } catch (error) {
-    // Only assume Consumption for ResourceNotFound (creating new Logic App)
+    // Only treat ResourceNotFound as "new Consumption Logic App".
     // Propagate auth errors, network failures, rate limits, etc.
-    if (error instanceof McpError && error.code === "ResourceNotFound") {
-      sku = "consumption";
-    } else {
+    if (!(error instanceof McpError && error.code === "ResourceNotFound")) {
       throw error;
     }
   }
 
-  if (sku === "consumption" || !workflowName) {
-    // Consumption: Create/update the entire Logic App resource
+  if (sku === "consumption") {
+    throw new McpError(
+      "ConflictError",
+      `Consumption Logic App '${logicAppName}' already exists in '${resourceGroupName}'. ` +
+        "Use update_workflow to change its definition."
+    );
+  }
+
+  if (sku === "standard" && !workflowName) {
+    throw new McpError(
+      "InvalidParameter",
+      `'${logicAppName}' is a Standard Logic App; workflowName is required to create a workflow in it.`
+    );
+  }
+
+  if (sku === undefined && workflowName) {
+    throw new McpError(
+      "ResourceNotFound",
+      `Logic App '${logicAppName}' not found. To add workflow '${workflowName}' the Standard Logic App must ` +
+        "already exist; to create a new Consumption Logic App, omit workflowName and provide location."
+    );
+  }
+
+  if (sku === undefined) {
+    // Consumption: Create the Logic App resource
     if (!location) {
       throw new McpError(
         "InvalidParameter",
@@ -517,7 +540,7 @@ export async function createWorkflow(
       location,
       properties: {
         definition,
-        state: "Enabled",
+        state: state ?? "Enabled",
         ...(parameters && { parameters }),
       },
     };
@@ -540,12 +563,29 @@ export async function createWorkflow(
     };
   }
 
+  if (!workflowName) {
+    throw new McpError("InvalidParameter", "workflowName is required for Standard Logic Apps");
+  }
+
   // Standard: Create workflow within existing Logic App using VFS API
   const { hostname, masterKey } = await getStandardAppAccess(
     subscriptionId,
     resourceGroupName,
     logicAppName
   );
+
+  const workflowPath = `/admin/vfs/site/wwwroot/${workflowName}/workflow.json`;
+  const existing = await vfsReadJson<StandardWorkflowDefinitionFile>(
+    hostname,
+    workflowPath,
+    masterKey
+  );
+  if (existing) {
+    throw new McpError(
+      "ConflictError",
+      `Workflow '${workflowName}' already exists in '${logicAppName}'. Use update_workflow to change it.`
+    );
+  }
 
   const workflowContent: StandardWorkflowDefinitionFile = {
     definition,
@@ -676,9 +716,23 @@ export async function updateWorkflow(
     logicAppName
   );
 
+  // Preserve the existing kind and runtime configuration unless explicitly overridden
+  const existing = await vfsReadJson<StandardWorkflowDefinitionFile>(
+    hostname,
+    `/admin/vfs/site/wwwroot/${workflowName}/workflow.json`,
+    masterKey
+  );
+  if (!existing) {
+    throw new McpError(
+      "ResourceNotFound",
+      `Workflow '${workflowName}' not found in '${logicAppName}'. Use create_workflow to create it.`
+    );
+  }
+
   const workflowContent: StandardWorkflowDefinitionFile = {
+    ...existing,
     definition,
-    kind: kind ?? "Stateful",
+    kind: kind ?? existing.kind ?? "Stateful",
   };
 
   // Use VFS API to update the workflow.json file
@@ -870,6 +924,7 @@ export async function validateCloneWorkflow(
     `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/validateClone`,
     {
       method: "POST",
+      idempotent: true,
       queryParams: { "api-version": "2019-05-01" },
       body: cloneRequest,
     }

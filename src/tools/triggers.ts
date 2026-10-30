@@ -236,7 +236,7 @@ async function getCallbackUrlConsumption(
 ): Promise<GetTriggerCallbackUrlResult> {
   const response = await armRequest<CallbackUrlResponse>(
     `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/triggers/${triggerName}/listCallbackUrl`,
-    { method: "POST", queryParams: { "api-version": "2019-05-01" } }
+    { method: "POST", queryParams: { "api-version": "2019-05-01" }, idempotent: true }
   );
 
   return {
@@ -258,7 +258,7 @@ async function getCallbackUrlStandard(
   // For Standard, use ARM API with hostruntime path
   const response = await armRequest<CallbackUrlResponse>(
     `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Web/sites/${logicAppName}/hostruntime/runtime/webhooks/workflow/api/management/workflows/${workflowName}/triggers/${triggerName}/listCallbackUrl`,
-    { method: "POST", queryParams: { "api-version": "2022-03-01" } }
+    { method: "POST", queryParams: { "api-version": "2022-03-01" }, idempotent: true }
   );
 
   return {

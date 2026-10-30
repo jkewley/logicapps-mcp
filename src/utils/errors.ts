@@ -13,6 +13,7 @@ export type McpErrorCode =
   | "ServiceUnavailable"
   | "ServiceError"
   | "InvalidTool"
+  | "CapabilityDisabled"
   | "UnknownError";
 
 export class McpError extends Error {

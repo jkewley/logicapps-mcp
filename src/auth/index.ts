@@ -7,7 +7,7 @@
 export { getAzureCliToken, checkAzureCliAuth } from "./azureCli.js";
 export type { AzureCliToken } from "./azureCli.js";
 
-// Token manager (passthrough-only authentication)
+// Token manager (request-scoped passthrough, or Azure CLI in stdio mode)
 export {
   getAccessToken,
   setSettings,
@@ -15,4 +15,7 @@ export {
   logout,
   setPassthroughToken,
   clearPassthroughToken,
+  runWithToken,
+  enableAzureCliAuth,
+  getCallerCacheKey,
 } from "./tokenManager.js";

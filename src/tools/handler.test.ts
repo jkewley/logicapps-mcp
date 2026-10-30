@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleToolCall } from "./handler.js";
+import { setEnabledCapabilities } from "./capabilities.js";
 
 // Mock all tool implementations
 vi.mock("./subscriptions.js", () => ({
@@ -36,6 +37,7 @@ import { getConnections } from "./connections.js";
 describe("handleToolCall", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setEnabledCapabilities([]);
   });
 
   it("should call listSubscriptions for list_subscriptions tool", async () => {
@@ -139,7 +141,7 @@ describe("handleToolCall", () => {
         name: "run-123",
         status: "Succeeded",
         startTime: "2024-01-01T00:00:00Z",
-        trigger: { name: "manual" },
+        trigger: { name: "manual", hasInputs: false, hasOutputs: false },
       },
     };
     vi.mocked(getRunDetails).mockResolvedValue(mockResult);
@@ -194,7 +196,33 @@ describe("handleToolCall", () => {
     expect(getConnections).toHaveBeenCalledWith("sub-123", "rg-test");
   });
 
+  it("should reject execute tools when the execute capability is disabled", async () => {
+    setEnabledCapabilities([]);
+    const result = await handleToolCall("resubmit_run", {
+      subscriptionId: "sub-123",
+      resourceGroupName: "rg-test",
+      logicAppName: "my-app",
+      runId: "run-123",
+    });
+
+    expect(result.isError).toBe(true);
+    const error = JSON.parse((result.content[0] as { text: string }).text);
+    expect(error.error.code).toBe("CapabilityDisabled");
+    expect(error.error.message).toContain("LOGICAPPS_MCP_CAPABILITIES=execute");
+    expect(resubmitRun).not.toHaveBeenCalled();
+  });
+
+  it("should reject gated tools before validating arguments", async () => {
+    setEnabledCapabilities([]);
+    for (const tool of ["delete_workflow", "invoke_connector_operation", "get_trigger_callback_url"]) {
+      const result = await handleToolCall(tool, {});
+      const error = JSON.parse((result.content[0] as { text: string }).text);
+      expect(error.error.code).toBe("CapabilityDisabled");
+    }
+  });
+
   it("should call resubmitRun with correct parameters for Consumption", async () => {
+    setEnabledCapabilities(["execute"]);
     const mockResult = {
       success: true,
       originalRunId: "run-123",
@@ -215,6 +243,7 @@ describe("handleToolCall", () => {
   });
 
   it("should call resubmitRun with workflowName for Standard", async () => {
+    setEnabledCapabilities(["execute"]);
     const mockResult = {
       success: true,
       originalRunId: "run-456",

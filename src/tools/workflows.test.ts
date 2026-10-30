@@ -6,7 +6,10 @@ import {
   getWorkflowDefinition,
   getWorkflowTriggers,
   listWorkflowVersions,
+  createWorkflow,
+  updateWorkflow,
 } from "./workflows.js";
+import { McpError } from "../utils/errors.js";
 
 // Mock the http module
 vi.mock("../utils/http.js", () => ({
@@ -14,6 +17,7 @@ vi.mock("../utils/http.js", () => ({
   armRequestVoid: vi.fn(),
   vfsRequest: vi.fn(),
   workflowMgmtRequest: vi.fn(),
+  vfsReadJson: vi.fn(),
 }));
 
 // Mock the shared module
@@ -579,6 +583,97 @@ describe("workflows", () => {
       const result = await listWorkflowVersions("sub-123", "rg", "myapp");
 
       expect(result.versions).toHaveLength(0);
+    });
+  });
+
+  describe("createWorkflow safety", () => {
+    const def = { triggers: {}, actions: {} } as never;
+
+    it("refuses to overwrite an existing Consumption Logic App", async () => {
+      const { detectLogicAppSku } = await import("./shared.js");
+      const { armRequest } = await import("../utils/http.js");
+      vi.mocked(detectLogicAppSku).mockResolvedValue("consumption");
+
+      await expect(createWorkflow("s", "rg", "app", def, "westus")).rejects.toMatchObject({
+        code: "ConflictError",
+      });
+      expect(armRequest).not.toHaveBeenCalled();
+    });
+
+    it("requires workflowName for an existing Standard app", async () => {
+      const { detectLogicAppSku } = await import("./shared.js");
+      vi.mocked(detectLogicAppSku).mockResolvedValue("standard");
+      await expect(createWorkflow("s", "rg", "app", def, "westus")).rejects.toMatchObject({
+        code: "InvalidParameter",
+      });
+    });
+
+    it("does not create a Consumption app when workflowName is given for a missing app", async () => {
+      const { detectLogicAppSku } = await import("./shared.js");
+      const { armRequest } = await import("../utils/http.js");
+      vi.mocked(detectLogicAppSku).mockRejectedValue(new McpError("ResourceNotFound", "nope"));
+      await expect(createWorkflow("s", "rg", "app", def, "westus", "wf")).rejects.toMatchObject({
+        code: "ResourceNotFound",
+      });
+      expect(armRequest).not.toHaveBeenCalled();
+    });
+
+    it("creates a Consumption app with the requested state", async () => {
+      const { detectLogicAppSku } = await import("./shared.js");
+      const { armRequest } = await import("../utils/http.js");
+      vi.mocked(detectLogicAppSku).mockRejectedValue(new McpError("ResourceNotFound", "nope"));
+      vi.mocked(armRequest).mockResolvedValue({});
+      await createWorkflow("s", "rg", "app", def, "westus", undefined, undefined, undefined, "Disabled");
+      expect(armRequest).toHaveBeenCalledWith(
+        expect.stringContaining("/workflows/app"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.objectContaining({ properties: expect.objectContaining({ state: "Disabled" }) }),
+        })
+      );
+    });
+
+    it("refuses to overwrite an existing Standard workflow", async () => {
+      const { detectLogicAppSku, getStandardAppAccess } = await import("./shared.js");
+      const { vfsReadJson, vfsRequest } = await import("../utils/http.js");
+      vi.mocked(detectLogicAppSku).mockResolvedValue("standard");
+      vi.mocked(getStandardAppAccess).mockResolvedValue({ hostname: "h", masterKey: "k" } as never);
+      vi.mocked(vfsReadJson).mockResolvedValue({ definition: {}, kind: "Stateful" });
+      await expect(createWorkflow("s", "rg", "app", def, undefined, "wf")).rejects.toMatchObject({
+        code: "ConflictError",
+      });
+      expect(vfsRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("updateWorkflow (Standard)", () => {
+    const def = { triggers: {}, actions: { a: {} } } as never;
+
+    beforeEach(async () => {
+      const { detectLogicAppSku, getStandardAppAccess } = await import("./shared.js");
+      vi.mocked(detectLogicAppSku).mockResolvedValue("standard");
+      vi.mocked(getStandardAppAccess).mockResolvedValue({ hostname: "h", masterKey: "k" } as never);
+    });
+
+    it("preserves the existing kind and extra fields", async () => {
+      const { vfsReadJson, vfsRequest } = await import("../utils/http.js");
+      vi.mocked(vfsReadJson).mockResolvedValue({ definition: {}, kind: "Stateless", extra: 1 });
+      await updateWorkflow("s", "rg", "app", def, "wf");
+      expect(vfsRequest).toHaveBeenCalledWith(
+        "h",
+        "/admin/vfs/site/wwwroot/wf/workflow.json",
+        "k",
+        expect.objectContaining({ method: "PUT", body: { definition: def, kind: "Stateless", extra: 1 } })
+      );
+    });
+
+    it("fails when the workflow does not exist", async () => {
+      const { vfsReadJson, vfsRequest } = await import("../utils/http.js");
+      vi.mocked(vfsReadJson).mockResolvedValue(null);
+      await expect(updateWorkflow("s", "rg", "app", def, "wf")).rejects.toMatchObject({
+        code: "ResourceNotFound",
+      });
+      expect(vfsRequest).not.toHaveBeenCalled();
     });
   });
 });

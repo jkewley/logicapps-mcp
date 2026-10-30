@@ -1,11 +1,25 @@
 ---
-version: 0.2.0
-lastUpdated: 2025-12-26
+version: 0.3.0
+lastUpdated: 2026-02-01
 ---
 
 # Tool Catalog
 
-Complete reference for all 40 MCP tools available in `logicapps-mcp`.
+Complete reference for all 42 MCP tools available in `logicapps-mcp`.
+
+## Capabilities (read-only by default)
+
+The server is read-only unless the user opts in. Tools needing an opt-in capability are hidden
+from `tools/list` and return `CapabilityDisabled` if called. If a user asks for one of these
+operations and the tool is unavailable, tell them which capability to enable
+(`--allow <capability>` or `LOGICAPPS_MCP_CAPABILITIES`) rather than looking for a workaround.
+
+| Capability | Tools |
+|------------|-------|
+| `execute` | `run_trigger`, `resubmit_run`, `cancel_run` |
+| `write` | `create_workflow`, `update_workflow`, `delete_workflow`, `enable_workflow`, `disable_workflow`, `clone_workflow`, `create_connection` |
+| `connector` | `invoke_connector_operation`, live probe in `test_connection` |
+| `secrets` | `get_trigger_callback_url` |
 
 **Microsoft Docs:**
 - [Logic Apps REST API reference](https://learn.microsoft.com/rest/api/logic/)
@@ -123,6 +137,9 @@ Create a new workflow.
 | workflowName | Standard only | Workflow name to create |
 | location | Consumption only | Azure region |
 | kind | Standard only | `Stateful` or `Stateless` |
+| state | No | `Enabled` (default) or `Disabled` — create disabled to avoid triggers firing immediately |
+
+**Requires:** `write`. Fails with `ConflictError` if the Logic App (Consumption) or workflow (Standard) already exists — use `update_workflow` instead.
 
 **Example:**
 ```
@@ -137,7 +154,9 @@ Update an existing workflow's definition.
 
 **When:** Modify workflow structure, add/remove actions.
 
-**Parameters:** Same as create_workflow (replaces entire definition).
+**Parameters:** Same as create_workflow (replaces entire definition). For Standard, the existing `kind` is preserved unless `kind` is passed.
+
+**Requires:** `write`.
 
 **Workflow:**
 1. `get_workflow_definition` to get current
@@ -249,6 +268,8 @@ Get the HTTP trigger URL with SAS token.
 
 **When:** User needs the URL to call the workflow.
 
+**Requires:** `secrets` (the URL grants anyone holding it the ability to invoke the workflow).
+
 ---
 
 ### run_trigger
@@ -256,6 +277,8 @@ Get the HTTP trigger URL with SAS token.
 Manually fire a trigger.
 
 **When:** Test workflow, force immediate execution.
+
+**Requires:** `execute`.
 
 **Parameters:**
 | Name | Required | Description |
@@ -292,6 +315,9 @@ Search runs with friendly parameters.
 | endTime | No | ISO timestamp (runs before this time) |
 | clientTrackingId | No | Correlation/tracking ID |
 | top | No | Number of results (default 25) |
+| skipToken | No | Continuation token from a previous call's `skipToken` |
+
+**Returns:** `runs`, `count`, `hasMore`, `skipToken`, `pagesScanned`. `clientTrackingId` is filtered client-side, scanning up to 10 pages per call.
 
 **Example:**
 ```
@@ -307,9 +333,11 @@ Get detailed info about a specific run.
 **When:** See overall run status, error summary.
 
 **Returns:**
-- Status, start/end times
+- Status, start/end times, `durationMs`, `code`
 - Error summary if failed
-- Trigger info
+- Trigger status/code/times, tracked properties, whether inputs/outputs exist
+- `workflowVersion` (which definition version ran) and `correlation` (clientTrackingId)
+- Names of run `outputs`
 
 ---
 
@@ -345,6 +373,7 @@ Get actual inputs and outputs for an action.
 | ...standard params... | Yes | |
 | actionName | Yes | Action name |
 | type | No | `inputs`, `outputs`, or `both` (default) |
+| repetitionName | No | Loop iteration (e.g., `000003`) — get names from `get_action_repetitions` |
 
 ---
 
@@ -397,6 +426,62 @@ Get HTTP request/response details with retries.
 Cancel a running or waiting execution.
 
 **When:** Stop stuck workflow, abort long-running process.
+
+**Requires:** `execute`.
+
+---
+
+### resubmit_run
+
+Resubmit a run with its original trigger inputs.
+
+**When:** Retry a failed run after fixing the cause.
+
+**Requires:** `execute`.
+
+---
+
+## Failure Analysis & Test Data Tools
+
+### analyze_run_failures
+
+Aggregate failures across recent failed runs.
+
+**When:** "Why does this workflow keep failing?", triage, writing an incident summary. Use before drilling into individual runs.
+
+**Parameters:**
+| Name | Required | Description |
+|------|----------|-------------|
+| subscriptionId, resourceGroupName, logicAppName | Yes | Resource identifiers |
+| workflowName | Standard only | Workflow name |
+| startTime / endTime | No | ISO time window |
+| maxRuns | No | Failed runs to analyze (default 25, max 50) |
+
+**Returns:** `failureGroups` sorted root-cause first then by count (`actionName`, `errorCode`, `count`, `sampleMessage`, `sampleRunIds`, `firstSeen`/`lastSeen`, `isRootCause`), `runLevelErrors` (e.g. trigger/run failures with no failed action), `hasMoreFailedRuns`, `nextSteps`.
+
+`isRootCause=false` marks propagated failures (`ActionFailed` on scopes, skipped actions) — focus on the root-cause groups.
+
+---
+
+### extract_run_test_data
+
+Turn a historical run into test fixtures.
+
+**When:** Modernizing/migrating a workflow and needing realistic test data; building regression tests; documenting real payloads.
+
+**Parameters:**
+| Name | Required | Description |
+|------|----------|-------------|
+| subscriptionId, resourceGroupName, logicAppName, runId | Yes | Resource identifiers |
+| workflowName | Standard only | Workflow name |
+| actionNames | No | Only include these actions |
+| includeInputs | No | Include trigger/action inputs (default true) |
+| redact | No | Redact secrets (default true) |
+| maxPayloadBytes | No | Per-payload size cap (default 32768) |
+
+**Returns:** `source` (run id, status, workflowVersion, clientTrackingId), `triggerMock` and `actionMocks` (status + outputs, shaped like the Automated Test SDK `TriggerMock`/`ActionMock`), `triggerInputs`/`actionInputs`, `expected` (run + per-action statuses), `redaction`, `truncatedPayloads`, `notes`.
+
+**Tip:** Pick representative runs (one success, one per distinct failure from `analyze_run_failures`) and extract each. Review output before committing — redaction is heuristic.
 
 **Only works on:** `Running` or `Waiting` status.
 
@@ -487,7 +572,7 @@ Verify a connection is working.
 
 **When:** Debug connector failures, check if connection is healthy.
 
-**Returns:** Status, error details if failed.
+**Returns:** Status, error details if failed. Without the `connector` capability it reports status only (with a `note`); with it, it also calls the connection's live test link.
 
 ---
 
@@ -570,11 +655,15 @@ Get Standard Logic App host status.
 | See workflow definition | `get_workflow_definition` |
 | Create a workflow | `create_workflow` |
 | Find failed runs | `search_runs` + `get_run_details` |
+| Find recurring failure causes | `analyze_run_failures` |
+| Get test data from a real run | `extract_run_test_data` |
+| Debug a single loop iteration | `get_action_repetitions` + `get_action_io(repetitionName)` |
 | Debug failed action | `get_run_actions` + `get_action_io` |
 | Debug expression | `get_expression_traces` |
 | Debug loop | `get_action_repetitions` |
 | Check connection health | `test_connection` |
 | Find connector operations | `get_connector_swagger` |
 | Get table/queue list | `invoke_connector_operation` |
-| Stop stuck run | `cancel_run` |
-| Test workflow | `run_trigger` |
+| Stop stuck run | `cancel_run` (requires `execute`) |
+| Retry a failed run | `resubmit_run` (requires `execute`) |
+| Test workflow | `run_trigger` (requires `execute`) |

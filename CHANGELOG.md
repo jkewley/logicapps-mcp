@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+### ⚠️ Breaking Changes
+- **Read-only by default.** Tools that invoke, modify, or expose secrets of live Logic Apps are now
+  opt-in via capabilities (`execute`, `write`, `connector`, `secrets`, or `all`). Enable with
+  `--allow <list>`, `LOGICAPPS_MCP_CAPABILITIES`, or `"capabilities"` in the config file.
+  Disabled tools are hidden from `tools/list` and return `CapabilityDisabled` if called.
+- `create_workflow` no longer overwrites: it fails with `ConflictError` if the Consumption Logic App
+  or Standard workflow already exists, and requires the Standard app to exist when `workflowName` is given.
+- `list_logic_apps`, `get_connections` and `get_run_actions` now return all pages; their `nextLink` fields were removed.
+- `test_connection` only reports status unless `connector` is enabled (the live probe calls the backend).
+
+### Added
+- `analyze_run_failures`: groups recent failed runs by failing action and error code, ranking root causes over propagated failures.
+- `extract_run_test_data`: converts a historical run into redacted trigger/action mocks and expected statuses for test fixtures.
+- MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on every tool.
+- `get_action_io` accepts `repetitionName` for per-iteration loop inputs/outputs.
+- `create_workflow` accepts `state` (`Enabled`/`Disabled`).
+- `get_run_details` returns duration, run/trigger codes, trigger timing, `workflowVersion`, correlation and output names.
+- `search_runs` returns `skipToken`, `hasMore` and `pagesScanned`; `clientTrackingId` searches resume reliably.
+
+### Fixed
+- HTTP/Functions hosts: bearer tokens are scoped per request (`AsyncLocalStorage`) instead of a shared global, and caches are partitioned per caller.
+- Local mode caches the Azure CLI token until shortly before expiry instead of spawning `az` per request.
+- Non-idempotent POSTs (run trigger, resubmit, clone, connector invoke) are no longer retried on 5xx/network errors (only on 429), preventing duplicate executions.
+- Pagination `nextLink`s are only followed over HTTPS to the expected host, so the bearer token cannot leak to other hosts.
+- `update_workflow` (Standard) preserves the existing `kind` and other `workflow.json` fields instead of resetting to `Stateful`.
+- Docs: `get_reference` tool name corrected.
+
 ## [0.4.3] - 2026-01-11
 
 ### Changed

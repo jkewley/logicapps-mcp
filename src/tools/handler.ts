@@ -44,6 +44,7 @@ import {
   createConnection,
 } from "./connections.js";
 import { getHostStatus } from "./host.js";
+import { analyzeRunFailures, extractRunTestData } from "./diagnostics.js";
 import {
   getTroubleshootingGuide,
   getAuthoringGuide,
@@ -52,6 +53,7 @@ import {
 } from "./knowledge.js";
 import { McpError, formatError } from "../utils/errors.js";
 import { TOOL_SCHEMAS } from "./schemas.js";
+import { assertToolAllowed } from "./capabilities.js";
 
 /**
  * Format a ZodError into a user-friendly error response.
@@ -85,6 +87,9 @@ export async function handleToolCall(
 ): Promise<CallToolResult> {
   try {
     let result: unknown;
+
+    // Enforce capability policy before any validation or Azure call.
+    assertToolAllowed(name);
 
     switch (name) {
       case "list_subscriptions":
@@ -182,8 +187,24 @@ export async function handleToolCall(
         break;
       }
       case "get_action_io": {
-        const v = validateArgs<{ subscriptionId: string; resourceGroupName: string; logicAppName: string; runId: string; actionName: string; workflowName?: string; type?: "inputs" | "outputs" | "both" }>(name, args);
-        result = await getActionIO(v.subscriptionId, v.resourceGroupName, v.logicAppName, v.runId, v.actionName, v.workflowName, v.type);
+        const v = validateArgs<{ subscriptionId: string; resourceGroupName: string; logicAppName: string; runId: string; actionName: string; workflowName?: string; type?: "inputs" | "outputs" | "both"; repetitionName?: string }>(name, args);
+        result = await getActionIO(v.subscriptionId, v.resourceGroupName, v.logicAppName, v.runId, v.actionName, v.workflowName, v.type, v.repetitionName);
+        break;
+      }
+      case "analyze_run_failures": {
+        const v = validateArgs<{ subscriptionId: string; resourceGroupName: string; logicAppName: string; workflowName?: string; startTime?: string; endTime?: string; maxRuns?: number }>(name, args);
+        result = await analyzeRunFailures(v.subscriptionId, v.resourceGroupName, v.logicAppName, v.workflowName, v.startTime, v.endTime, v.maxRuns);
+        break;
+      }
+      case "extract_run_test_data": {
+        const v = validateArgs<{ subscriptionId: string; resourceGroupName: string; logicAppName: string; runId: string; workflowName?: string; actionNames?: string[]; includeInputs?: boolean; redact?: boolean; maxPayloadBytes?: number }>(name, args);
+        result = await extractRunTestData(v.subscriptionId, v.resourceGroupName, v.logicAppName, v.runId, {
+          workflowName: v.workflowName,
+          actionNames: v.actionNames,
+          includeInputs: v.includeInputs,
+          redact: v.redact,
+          maxPayloadBytes: v.maxPayloadBytes,
+        });
         break;
       }
       case "search_runs": {
@@ -243,8 +264,8 @@ export async function handleToolCall(
         break;
       }
       case "create_workflow": {
-        const v = validateArgs<{ subscriptionId: string; resourceGroupName: string; logicAppName: string; definition: import("../types/logicApp.js").WorkflowDefinition; location?: string; workflowName?: string; kind?: string; connections?: Record<string, { connectionName: string; id: string }> }>(name, args);
-        result = await createWorkflow(v.subscriptionId, v.resourceGroupName, v.logicAppName, v.definition, v.location, v.workflowName, v.kind, v.connections);
+        const v = validateArgs<{ subscriptionId: string; resourceGroupName: string; logicAppName: string; definition: import("../types/logicApp.js").WorkflowDefinition; location?: string; workflowName?: string; kind?: string; connections?: Record<string, { connectionName: string; id: string }>; state?: "Enabled" | "Disabled" }>(name, args);
+        result = await createWorkflow(v.subscriptionId, v.resourceGroupName, v.logicAppName, v.definition, v.location, v.workflowName, v.kind, v.connections, v.state);
         break;
       }
       case "update_workflow": {

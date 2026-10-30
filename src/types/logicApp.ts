@@ -82,14 +82,31 @@ export interface WorkflowRun {
     status: "Running" | "Waiting" | "Succeeded" | "Failed" | "Cancelled" | "Skipped";
     startTime: string;
     endTime?: string;
+    waitEndTime?: string;
+    code?: string;
     trigger?: {
       name: string;
-      inputsLink?: { uri: string };
-      outputsLink?: { uri: string };
+      status?: string;
+      code?: string;
+      startTime?: string;
+      endTime?: string;
+      scheduledTime?: string;
+      inputsLink?: { uri: string; contentSize?: number };
+      outputsLink?: { uri: string; contentSize?: number };
+      correlation?: { clientTrackingId?: string };
+      trackedProperties?: Record<string, unknown>;
+      error?: unknown;
+    };
+    workflow?: {
+      id?: string;
+      name?: string;
+      type?: string;
     };
     correlation?: {
       clientTrackingId: string;
     };
+    outputs?: Record<string, unknown>;
+    response?: unknown;
     error?: {
       code: string;
       message: string;
@@ -103,11 +120,16 @@ export interface RunAction {
   name: string;
   type: string;
   properties: {
-    status: "Succeeded" | "Failed" | "Skipped" | "Waiting" | "Running";
+    status: "Succeeded" | "Failed" | "Skipped" | "Waiting" | "Running" | "TimedOut" | "Cancelled";
     startTime: string;
     endTime?: string;
-    inputsLink?: { uri: string };
-    outputsLink?: { uri: string };
+    code?: string;
+    inputsLink?: { uri: string; contentSize?: number };
+    outputsLink?: { uri: string; contentSize?: number };
+    correlation?: { actionTrackingId?: string; clientTrackingId?: string };
+    retryHistory?: Array<{ startTime?: string; endTime?: string; code?: string; error?: unknown }>;
+    repetitionCount?: number;
+    iterationCount?: number;
     error?: {
       code: string;
       message: string;

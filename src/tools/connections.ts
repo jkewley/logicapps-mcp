@@ -2,11 +2,12 @@
  * API Connection operations.
  */
 
-import { armRequest, fetchWithRetry } from "../utils/http.js";
+import { armRequest, armRequestAllPages, fetchWithRetry } from "../utils/http.js";
 import { ApiConnection } from "../types/logicApp.js";
 import { getAccessToken } from "../auth/tokenManager.js";
 import { getCloudEndpoints } from "../config/clouds.js";
 import { McpError } from "../utils/errors.js";
+import { isCapabilityEnabled } from "./capabilities.js";
 
 export interface GetConnectionsResult {
   connections: Array<{
@@ -17,19 +18,16 @@ export interface GetConnectionsResult {
     status: string;
     createdTime: string;
   }>;
-  nextLink?: string;
 }
 
 export async function getConnections(
   subscriptionId: string,
   resourceGroupName: string
 ): Promise<GetConnectionsResult> {
-  const response = await armRequest<{ value: ApiConnection[]; nextLink?: string }>(
+  const connections = await armRequestAllPages<ApiConnection>(
     `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Web/connections`,
-    { queryParams: { "api-version": "2018-07-01-preview" } }
+    { "api-version": "2018-07-01-preview" }
   );
-
-  const connections = response.value ?? [];
 
   return {
     connections: connections.map((conn) => ({
@@ -40,7 +38,6 @@ export async function getConnections(
       status: conn.properties.statuses?.[0]?.status ?? "Unknown",
       createdTime: conn.properties.createdTime,
     })),
-    nextLink: response.nextLink,
   };
 }
 
@@ -117,6 +114,7 @@ export interface TestConnectionResult {
     message: string;
   };
   testedAt: string;
+  note?: string;
 }
 
 /**
@@ -151,7 +149,19 @@ export async function testConnection(
     return result;
   }
 
-  // If there are test links, try to use them
+  // Live test links make a real call through the connector, so they require
+  // the opt-in "connector" capability. Otherwise report status only.
+  if (details.testLinks && details.testLinks.length > 0 && !isCapabilityEnabled("connector")) {
+    result.error = {
+      code: "NotConnected",
+      message: `Connection status is ${details.status}`,
+    };
+    result.note =
+      "Active connection probe skipped: it requires the 'connector' capability " +
+      "(set LOGICAPPS_MCP_CAPABILITIES=connector or pass --allow connector).";
+    return result;
+  }
+
   if (details.testLinks && details.testLinks.length > 0) {
     const testLink = details.testLinks[0];
     const token = await getAccessToken();

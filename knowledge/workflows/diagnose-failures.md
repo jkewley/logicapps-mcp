@@ -41,6 +41,20 @@ Parameters:
 - When did they start? (look at startTime)
 - Is it all runs or intermittent?
 
+**Multiple failures?** Get the aggregate picture in one call:
+
+```
+Call: analyze_run_failures
+Parameters:
+  - ... standard params ...
+  - startTime / endTime (optional)
+  - maxRuns: 25
+```
+
+It groups failures by action + error code. Focus on groups with `isRootCause: true`;
+`ActionFailed` on scopes and skipped actions are propagated failures. Use the `sampleRunIds`
+to drill into specific runs below, and `runLevelErrors` for trigger/run failures with no failed action.
+
 **If no failures found**, tell the user and suggest checking:
 - Different time range (use startTime/endTime)
 - Check for "Cancelled" status too
@@ -136,11 +150,12 @@ Parameters:
   - ... standard params ...
   - actionName: [the loop action name]
 ```
-This shows which iterations failed.
+This shows which iterations failed. Then call `get_action_io` with `repetitionName`
+(e.g. `000003`) to see that iteration's inputs and outputs.
 
 ### Intermittent Failures
 If only some runs fail:
-- Compare inputs between successful and failed runs
+- Compare inputs between successful and failed runs (`extract_run_test_data` on one of each gives redacted, side-by-side payloads that can also become regression test fixtures)
 - Look for data-dependent issues
 - Check for rate limiting patterns
 
@@ -153,3 +168,10 @@ Parameters:
   - triggerName: [from get_workflow_triggers]
 ```
 Check if trigger is receiving events but skipping them.
+
+## Fixing and Retrying
+
+The server is read-only by default. Changing the workflow (`update_workflow`) requires the
+`write` capability, and retrying a run (`resubmit_run`) requires `execute`. If those tools aren't
+available, produce the corrected definition/diff for the user and tell them which capability
+to enable (`--allow write` / `LOGICAPPS_MCP_CAPABILITIES=write`).

@@ -20,9 +20,9 @@ import { loadSettings } from "../config/index.js";
 import {
   setSettings,
   initializeAuth,
-  setPassthroughToken,
-  clearPassthroughToken,
+  runWithToken,
 } from "../auth/index.js";
+import { setEnabledCapabilities } from "../tools/capabilities.js";
 import { setCacheTtl } from "../tools/index.js";
 import { VERSION } from "../version.js";
 
@@ -37,6 +37,7 @@ async function ensureInitialized(): Promise<void> {
   const settings = await loadSettings();
   setSettings(settings);
   setCacheTtl(settings.cacheTtlSeconds);
+  setEnabledCapabilities(settings.capabilities);
   await initializeAuth();
   initialized = true;
 }
@@ -141,20 +142,14 @@ async function mcpHandler(
   try {
     await ensureInitialized();
 
-    // Extract bearer token for passthrough auth (required)
+    // Extract bearer token for passthrough auth (required). The token is scoped to
+    // this request's async context so concurrent invocations never share tokens.
     const authHeader = request.headers.get("authorization");
-    const bearerToken = authHeader?.replace(/^Bearer\s+/i, "");
+    const bearerToken = authHeader?.replace(/^Bearer\s+/i, "") || undefined;
 
-    if (bearerToken) {
-      setPassthroughToken(bearerToken);
-    }
-    // If no token, tools will fail with AuthenticationError when they try to get token
-
-    try {
-      // Convert Azure Functions request to Web Standard Request
+    return await runWithToken(bearerToken, async () => {
       const webRequest = await convertRequest(request);
 
-      // Create MCP server and transport
       const mcpServer = createMcpServer();
       const transport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // Stateless mode
@@ -162,23 +157,15 @@ async function mcpHandler(
       });
 
       await mcpServer.connect(transport);
-
-      // Handle the request
       const response = await transport.handleRequest(webRequest);
 
-      // Clean up
       await transport.close();
       await mcpServer.close();
 
-      // Convert Web Standard Response to Azure Functions response
       const azResponse = await convertResponse(response);
       context.log(`MCP response status: ${azResponse.status}`);
-
       return azResponse;
-    } finally {
-      // Always clear the passthrough token after request
-      clearPassthroughToken();
-    }
+    });
   } catch (error) {
     context.error("Error handling MCP request:", error);
     return {
