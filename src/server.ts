@@ -29,6 +29,10 @@ The server is read-only by default. Tools that run, change, or reveal secrets of
 only appear when the user opts in (\`--allow execute|write|connector|secrets\` or
 LOGICAPPS_MCP_CAPABILITIES). If a needed tool is missing, explain which capability enables it.
 
+## Setup Problems
+If tools fail with AuthenticationError (e.g. not logged in to Azure CLI), call \`check_setup\`
+and relay its remediation steps to the user (usually "run az login").
+
 ## Common Workflows
 
 ### 1. Debug a Failed Run

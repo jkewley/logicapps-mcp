@@ -147,5 +147,37 @@ describe("settings", () => {
       process.env.LOGICAPPS_MCP_CAPABILITIES = "everything";
       await expect(loadSettings()).rejects.toThrow(/Unknown capability/);
     });
+
+    it("should warn (not silently ignore) an invalid config file", async () => {
+      vi.mocked(fs.readFile).mockResolvedValue("{not json");
+      const settings = await loadSettings();
+      expect(settings.warnings).toHaveLength(1);
+      expect(settings.warnings[0]).toMatch(/not valid JSON/);
+    });
+
+    it("should not warn when the config file is absent", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error("nope"), { code: "ENOENT" }));
+      const settings = await loadSettings();
+      expect(settings.warnings).toEqual([]);
+      expect(settings.capabilitySource).toBe("default");
+    });
+
+    it("should warn and fall back for invalid log level and cache TTL", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error("nope"), { code: "ENOENT" }));
+      process.env.LOGICAPPS_MCP_LOG_LEVEL = "verbose";
+      process.env.LOGICAPPS_MCP_CACHE_TTL = "abc";
+      const settings = await loadSettings();
+      expect(settings.logLevel).toBe("info");
+      expect(settings.cacheTtlSeconds).toBe(300);
+      expect(settings.warnings).toHaveLength(2);
+    });
+
+    it("should report the capability source", async () => {
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ capabilities: ["write"] }));
+      expect((await loadSettings()).capabilitySource).toBe("config");
+      process.env.LOGICAPPS_MCP_CAPABILITIES = "execute";
+      expect((await loadSettings()).capabilitySource).toBe("env");
+      expect((await loadSettings({ cliCapabilities: ["all"] })).capabilitySource).toBe("cli");
+    });
   });
 });

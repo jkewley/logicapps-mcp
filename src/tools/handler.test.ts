@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleToolCall } from "./handler.js";
 import { setEnabledCapabilities } from "./capabilities.js";
+import { McpError } from "../utils/errors.js";
 
 // Mock all tool implementations
 vi.mock("./subscriptions.js", () => ({
@@ -38,6 +39,18 @@ describe("handleToolCall", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setEnabledCapabilities([]);
+  });
+
+  it("points authentication errors at check_setup", async () => {
+    vi.mocked(listSubscriptions).mockRejectedValue(
+      new McpError("AuthenticationError", "Not logged in to Azure CLI. Please run: az login")
+    );
+    const result = await handleToolCall("list_subscriptions", {});
+    expect(result.isError).toBe(true);
+    const body = JSON.parse((result.content[0] as { text: string }).text);
+    expect(body.error.message).toBe(
+      "Not logged in to Azure CLI. Please run: az login. Call the check_setup tool to diagnose the server's Azure login and configuration."
+    );
   });
 
   it("should call listSubscriptions for list_subscriptions tool", async () => {

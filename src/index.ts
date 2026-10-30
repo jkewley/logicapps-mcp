@@ -12,6 +12,7 @@
  *   npx logicapps-mcp --http   # HTTP server mode
  *   npx logicapps-mcp --http --port 8080
  *   npx logicapps-mcp --allow execute,write   # opt in to non-read-only tools
+ *   npx logicapps-mcp --check                 # verify setup (az login, access) and exit
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -21,30 +22,52 @@ import { setSettings, initializeAuth, enableAzureCliAuth } from "./auth/index.js
 import { setEnabledCapabilities, getEnabledCapabilities } from "./tools/capabilities.js";
 import { setCacheTtl } from "./tools/index.js";
 import { registerToolsAndPrompts } from "./server.js";
+import { runSetupChecks, formatSetupReport } from "./setup/checks.js";
 import { VERSION } from "./version.js";
 
-/**
- * Run MCP server in stdio mode (for local MCP clients).
- */
-async function runStdioMode(cliCapabilities: string[]): Promise<void> {
+async function initLocal(cliCapabilities: string[], announce = true): Promise<void> {
   const settings = await loadSettings({ cliCapabilities });
   setSettings(settings);
   setCacheTtl(settings.cacheTtlSeconds);
   setEnabledCapabilities(settings.capabilities);
   // Local stdio mode uses the signed-in Azure CLI identity (az login)
   enableAzureCliAuth(true);
-  await initializeAuth();
+  if (announce) await initializeAuth();
+}
+
+/**
+ * Run setup checks, print a report and exit (non-zero if any check failed).
+ */
+async function runCheckMode(cliCapabilities: string[]): Promise<void> {
+  await initLocal(cliCapabilities, false);
+  const report = await runSetupChecks();
+  console.log(formatSetupReport(report));
+  process.exit(report.ok ? 0 : 1);
+}
+
+/**
+ * Run MCP server in stdio mode (for local MCP clients).
+ */
+async function runStdioMode(cliCapabilities: string[]): Promise<void> {
+  await initLocal(cliCapabilities);
   console.error(`Enabled capabilities: ${getEnabledCapabilities().join(", ")}`);
 
   const mcpServer = new McpServer(
     { name: "logicapps-mcp", version: VERSION },
-    { capabilities: { tools: {}, prompts: {} } }
+    { capabilities: { tools: {}, prompts: {}, logging: {} } }
   );
 
   registerToolsAndPrompts(mcpServer);
 
+  const initialized = new Promise<void>((resolve) => {
+    mcpServer.server.oninitialized = () => resolve();
+  });
+
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
+
+  // Preflight checks run in the background so they never delay the MCP handshake.
+  void reportStartupChecks(mcpServer, initialized);
 
   process.on("SIGINT", async () => {
     await mcpServer.close();
@@ -55,6 +78,33 @@ async function runStdioMode(cliCapabilities: string[]): Promise<void> {
     await mcpServer.close();
     process.exit(0);
   });
+}
+
+async function reportStartupChecks(mcpServer: McpServer, initialized: Promise<void>): Promise<void> {
+  try {
+    const report = await runSetupChecks();
+    // stderr shows up in the client's MCP server output/log
+    console.error(formatSetupReport(report));
+    const problems = report.checks.filter((c) => c.status === "fail" || c.status === "warn");
+    if (problems.length === 0) return;
+
+    await initialized;
+    await mcpServer.server.sendLoggingMessage({
+      level: report.ok ? "warning" : "error",
+      logger: "logicapps-mcp",
+      data: {
+        summary: report.summary,
+        problems: problems.map((c) => ({
+          check: c.title,
+          message: c.message,
+          remediation: c.remediation,
+        })),
+        hint: "Run the check_setup tool (or 'logicapps-mcp --check' in a terminal) after fixing.",
+      },
+    });
+  } catch (error) {
+    console.error("Setup check failed to run:", error);
+  }
 }
 
 /**
@@ -69,9 +119,10 @@ async function runHttpMode(port: number, cliCapabilities: string[]): Promise<voi
 /**
  * Parse command line arguments.
  */
-function parseArgs(): { mode: "stdio" | "http"; port: number; allow: string[] } {
+function parseArgs(): { mode: "stdio" | "http" | "check"; port: number; allow: string[] } {
   const args = process.argv.slice(2);
   const isHttp = args.includes("--http");
+  const isCheck = args.includes("--check");
 
   let port = 3000;
   const portIndex = args.indexOf("--port");
@@ -95,7 +146,7 @@ function parseArgs(): { mode: "stdio" | "http"; port: number; allow: string[] } 
   });
 
   return {
-    mode: isHttp ? "http" : "stdio",
+    mode: isCheck ? "check" : isHttp ? "http" : "stdio",
     port,
     allow,
   };
@@ -104,7 +155,9 @@ function parseArgs(): { mode: "stdio" | "http"; port: number; allow: string[] } 
 async function main(): Promise<void> {
   const { mode, port, allow } = parseArgs();
 
-  if (mode === "http") {
+  if (mode === "check") {
+    await runCheckMode(allow);
+  } else if (mode === "http") {
     await runHttpMode(port, allow);
   } else {
     await runStdioMode(allow);

@@ -45,10 +45,28 @@ Both options require Azure access (az login) to get credentials.
 npm install -g logicapps-mcp
 ```
 
-### Step 2: Login to Azure
+### Step 2: Login to Azure and verify
 
 ```bash
 az login
+logicapps-mcp --check     # or: npx -y logicapps-mcp --check
+```
+
+`--check` verifies the configuration, Azure CLI installation and login, token acquisition and
+subscription access, prints a fix for anything that is wrong, and exits non-zero on failure:
+
+```
+$ logicapps-mcp --check
+logicapps-mcp setup check (azure-cli auth)
+  ✔ Configuration: Cloud: AzurePublic; tenant: common
+  ✔ Capabilities: Read-only (default). Tools that run, change, or expose secrets of live Logic Apps are disabled.
+      → To enable more, add e.g. '--allow write,execute' to the server args or set LOGICAPPS_MCP_CAPABILITIES.
+  ✔ Azure CLI installed: Azure CLI 2.67.0
+  ✖ Azure CLI login: Not logged in to Azure CLI. Please run: az login
+      → Run 'az login' in a terminal, then retry (no server restart needed).
+  – Azure Resource Manager token: Skipped: Azure CLI login failed
+  – Subscription access: Skipped: no Azure token
+Setup has 1 problem(s). Most tools will fail until fixed.
 ```
 
 ### Step 3: Configure Your AI Assistant
@@ -165,6 +183,25 @@ Try these prompts:
 
 If you ask for a change (e.g. "disable this workflow") while read-only, the assistant will report
 that the `write` capability is disabled and how to enable it.
+
+### Troubleshooting
+
+The server runs the same setup checks in the background every time it starts:
+
+- Results are written to the server's log (VS Code: **MCP: List Servers → logicapps → Show Output**;
+  Claude Desktop: `mcp-server-logicapps.log`).
+- Problems are also sent to the client as MCP log notifications.
+- Ask the assistant **"check the Logic Apps MCP setup"** — it calls the `check_setup` tool and relays
+  the remediation steps. Tools that fail with authentication errors also point it at `check_setup`.
+
+| Symptom | Fix |
+|---------|-----|
+| Azure CLI is not installed or not on PATH | Install from https://aka.ms/installazurecli, then restart the client so it picks up the new PATH |
+| Not logged in / login expired | `az login` (no restart needed) |
+| Signed in to the wrong tenant | `az login --tenant <AZURE_TENANT_ID>` |
+| Azure CLI using a different cloud | `az cloud set --name AzureUSGovernment` (or `AzureChinaCloud`) then `az login` |
+| No subscriptions visible | Ask for `Reader`/`Logic App Operator` on the subscription or resource group |
+| Config file ignored | Fix the JSON in `~/.logicapps-mcp/config.json` (reported as a warning) |
 
 ## Cloud MCP Server Setup
 

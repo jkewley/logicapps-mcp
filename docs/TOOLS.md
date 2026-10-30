@@ -1,6 +1,6 @@
 # Available Tools
 
-This MCP server provides 42 tools for diagnosing, documenting and managing Azure Logic Apps.
+This MCP server provides 43 tools for diagnosing, documenting and managing Azure Logic Apps.
 
 ## Read-only by default
 
@@ -17,6 +17,12 @@ See [Configuration → Capabilities](CONFIGURATION.md#capabilities-read-only-by-
 | `secrets` | opt-in | `get_trigger_callback_url` (returns a SAS-signed URL) |
 
 Each listed tool also carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can prompt for confirmation appropriately.
+
+## Setup
+
+| Tool | Description |
+|------|-------------|
+| `check_setup` | Diagnose configuration, enabled capabilities, Azure CLI install/login, token and subscription access, with remediation steps. Same checks as `logicapps-mcp --check` |
 
 ## Discovery & Navigation
 

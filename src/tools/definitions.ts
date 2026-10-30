@@ -7,6 +7,16 @@ import { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 export const TOOL_DEFINITIONS: Tool[] = [
   {
+    name: "check_setup",
+    description:
+      "Diagnose the MCP server's setup: configuration, enabled capabilities (read-only by default), Azure CLI installation and login, Azure token, and subscription access. Returns pass/warn/fail checks with remediation steps. Call this first if other tools fail with authentication errors, or when the user asks why something isn't working or how to enable write operations, and relay the remediation steps to the user.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: "list_subscriptions",
     description:
       "List all Azure subscriptions accessible to the authenticated user. Use this first to discover available subscriptions, then use list_logic_apps to find Logic Apps.",

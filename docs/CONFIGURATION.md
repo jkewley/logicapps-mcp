@@ -85,6 +85,21 @@ az login
 
 In local (stdio) mode the MCP server uses the Azure CLI's tokens, caching each until shortly before expiry. In HTTP/Azure Functions mode each request must carry its own `Authorization: Bearer` token; tokens are scoped per request and never fall back to the server's Azure CLI identity.
 
+### Verifying your setup
+
+Run `logicapps-mcp --check` (add the same `--allow` flags you use in your client config) to verify
+configuration, Azure CLI login, token acquisition and subscription access. It prints a remediation
+for each problem and exits with code `1` if any check fails. The same checks run in the background
+at server startup (results go to the server log and to MCP log notifications) and are available to
+the AI assistant through the `check_setup` tool.
+
+Invalid settings are reported rather than silently ignored: a malformed config file, an unknown
+`LOGICAPPS_MCP_LOG_LEVEL`, or a non-numeric `LOGICAPPS_MCP_CACHE_TTL` produce warnings and fall
+back to defaults. An unknown capability name is a startup error.
+
+> Note: `AZURE_TENANT_ID` does not change which tenant Azure CLI signs in to. If it differs from
+> the CLI's tenant, the check warns and suggests `az login --tenant <id>`.
+
 ### Required Azure Permissions
 
 | Role | Scope | Purpose |
@@ -101,5 +116,5 @@ For read-only use with **Consumption** Logic Apps, `Logic App Operator` or `Read
 ## See Also
 
 - [Getting Started](GETTING_STARTED.md) - Setup guides for local MCP server or cloud agent
-- [Available Tools](TOOLS.md) - All 42 tools
+- [Available Tools](TOOLS.md) - All 43 tools
 - [Cloud MCP Server](design/CLOUD_MCP_SERVER.md) - Deploy to Azure for team/enterprise use
