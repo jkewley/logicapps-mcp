@@ -27,6 +27,8 @@ describe("settings", () => {
     delete process.env.LOGICAPPS_MCP_LOG_LEVEL;
     delete process.env.LOGICAPPS_MCP_CACHE_TTL;
     delete process.env.LOGICAPPS_MCP_CAPABILITIES;
+    delete process.env.AZURE_RESOURCE_GROUP;
+    delete process.env.LOGIC_APP_NAME;
   });
 
   afterEach(() => {
@@ -178,6 +180,52 @@ describe("settings", () => {
       process.env.LOGICAPPS_MCP_CAPABILITIES = "execute";
       expect((await loadSettings()).capabilitySource).toBe("env");
       expect((await loadSettings({ cliCapabilities: ["all"] })).capabilitySource).toBe("cli");
+    });
+  });
+
+  describe("resource scope", () => {
+    beforeEach(() => {
+      vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error("nope"), { code: "ENOENT" }));
+    });
+
+    it("is unset by default", async () => {
+      const settings = await loadSettings();
+      expect(settings.resourceGroupName).toBeUndefined();
+      expect(settings.logicAppName).toBeUndefined();
+    });
+
+    it("reads AZURE_RESOURCE_GROUP and LOGIC_APP_NAME", async () => {
+      process.env.AZURE_RESOURCE_GROUP = " rg-orders ";
+      process.env.LOGIC_APP_NAME = "la-orders";
+      const settings = await loadSettings();
+      expect(settings.resourceGroupName).toBe("rg-orders");
+      expect(settings.logicAppName).toBe("la-orders");
+    });
+
+    it("prefers CLI over env over config file", async () => {
+      vi.mocked(fs.readFile).mockResolvedValue(
+        JSON.stringify({ resourceGroupName: "rg-config", logicAppName: "la-config" })
+      );
+      expect((await loadSettings()).resourceGroupName).toBe("rg-config");
+      process.env.AZURE_RESOURCE_GROUP = "rg-env";
+      expect((await loadSettings()).resourceGroupName).toBe("rg-env");
+      const cli = await loadSettings({ cliResourceGroup: "rg-cli", cliLogicAppName: "la-cli" });
+      expect(cli.resourceGroupName).toBe("rg-cli");
+      expect(cli.logicAppName).toBe("la-cli");
+    });
+
+    it("warns and ignores invalid names", async () => {
+      process.env.AZURE_RESOURCE_GROUP = "bad/rg";
+      process.env.LOGIC_APP_NAME = "bad name?";
+      const settings = await loadSettings();
+      expect(settings.resourceGroupName).toBeUndefined();
+      expect(settings.logicAppName).toBeUndefined();
+      expect(settings.warnings).toHaveLength(2);
+    });
+
+    it("treats an empty AZURE_SUBSCRIPTION_ID as unset", async () => {
+      process.env.AZURE_SUBSCRIPTION_ID = "  ";
+      expect((await loadSettings()).defaultSubscriptionId).toBeUndefined();
     });
   });
 });

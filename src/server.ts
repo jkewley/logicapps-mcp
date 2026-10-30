@@ -8,6 +8,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { handleToolCall } from "./tools/handler.js";
 import { isToolEnabled, getToolAnnotations } from "./tools/capabilities.js";
+import { defaultableParams, describeScope } from "./scope/scope.js";
 
 const LOGIC_APPS_GUIDE = `# Azure Logic Apps MCP Server Guide
 
@@ -32,6 +33,11 @@ LOGICAPPS_MCP_CAPABILITIES). If a needed tool is missing, explain which capabili
 ## Setup Problems
 If tools fail with AuthenticationError (e.g. not logged in to Azure CLI), call \`check_setup\`
 and relay its remediation steps to the user (usually "run az login").
+
+## Resource Scope
+The server may be scoped to a resource group or to one Logic App and the apps it calls. If so,
+subscriptionId/resourceGroupName/logicAppName can be omitted (their descriptions say so), and
+OutOfScope errors mean the resource is outside that scope: tell the user rather than retrying.
 
 ## Common Workflows
 
@@ -771,10 +777,28 @@ Multiple statuses (error handling):
  * Tool definitions allowed by the current capability policy, with MCP annotations attached.
  */
 export function getEnabledToolDefinitions() {
-  return TOOL_DEFINITIONS.filter((t) => isToolEnabled(t.name)).map((t) => ({
-    ...t,
-    annotations: getToolAnnotations(t.name),
-  }));
+  return TOOL_DEFINITIONS.filter((t) => isToolEnabled(t.name)).map((t) => {
+    const properties = (t.inputSchema.properties ?? {}) as Record<string, { description?: string }>;
+    const defaults = defaultableParams(t.name, Object.keys(properties));
+    if (defaults.length === 0) return { ...t, annotations: getToolAnnotations(t.name) };
+    const newProps = { ...properties };
+    for (const p of defaults) {
+      const base = (properties[p]?.description ?? "").trim();
+      newProps[p] = {
+        ...properties[p],
+        description: `${base}${base && !/[.!?]$/.test(base) ? "." : ""} Optional: defaults to the server scope (${describeScope()}).`.trim(),
+      };
+    }
+    return {
+      ...t,
+      inputSchema: {
+        ...t.inputSchema,
+        properties: newProps,
+        required: (t.inputSchema.required ?? []).filter((r) => !defaults.includes(r)),
+      },
+      annotations: getToolAnnotations(t.name),
+    };
+  });
 }
 
 export function registerToolsAndPrompts(mcpServer: McpServer): void {

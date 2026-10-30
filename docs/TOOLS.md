@@ -16,6 +16,10 @@ See [Configuration → Capabilities](CONFIGURATION.md#capabilities-read-only-by-
 | `connector` | opt-in | `invoke_connector_operation`, active probe in `test_connection` |
 | `secrets` | opt-in | `get_trigger_callback_url` (returns a SAS-signed URL) |
 
+If the server is [scoped](CONFIGURATION.md#resource-scope) with `AZURE_RESOURCE_GROUP` or
+`LOGIC_APP_NAME`, `subscriptionId` / `resourceGroupName` / `logicAppName` may be omitted where the
+scope supplies them, and requests for resources outside the scope fail with `OutOfScope`.
+
 Each listed tool also carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can prompt for confirmation appropriately.
 
 ## Setup

@@ -8,7 +8,9 @@ Advanced configuration options for the local MCP server. Most users won't need t
 |----------|---------|------------------|
 | `AZURE_TENANT_ID` | Lock to a specific Azure AD tenant | Uses `common` - auto-detects tenant from your login |
 | `AZURE_CLIENT_ID` | Use a custom app registration | Uses Azure CLI's public client ID |
-| `AZURE_SUBSCRIPTION_ID` | Set a default subscription | None - you'll specify subscription in each request |
+| `AZURE_SUBSCRIPTION_ID` | Default subscription for every tool (also restricts the server when a scope below is set) | None - you'll specify subscription in each request |
+| `AZURE_RESOURCE_GROUP` | [Scope](#resource-scope) the server to Logic Apps and connections in one resource group | All resource groups |
+| `LOGIC_APP_NAME` | [Scope](#resource-scope) the server to one Logic App plus the Logic Apps it calls | All Logic Apps |
 | `AZURE_CLOUD` | Connect to sovereign clouds | `AzurePublic` |
 | `LOGICAPPS_MCP_LOG_LEVEL` | Control verbosity (debug, info, warn, error) | `info` |
 | `LOGICAPPS_MCP_CACHE_TTL` | Cache duration in seconds | `300` |
@@ -19,6 +21,7 @@ Advanced configuration options for the local MCP server. Most users won't need t
 - **Multi-tenant scenarios**: Set `AZURE_TENANT_ID` to avoid tenant picker prompts
 - **Enterprise policies**: Set `AZURE_CLIENT_ID` if your org requires a specific app registration
 - **Single subscription**: Set `AZURE_SUBSCRIPTION_ID` to skip specifying it in every request
+- **Focus on one app or team**: Set `AZURE_RESOURCE_GROUP` and/or `LOGIC_APP_NAME` (see [Resource scope](#resource-scope))
 - **Government/China clouds**: Set `AZURE_CLOUD` to `AzureGovernment` or `AzureChina`
 
 ## Capabilities (read-only by default)
@@ -60,6 +63,69 @@ Example VS Code configuration enabling run/resubmit only:
 
 The policy is process-wide and applies equally to stdio, HTTP and Azure Functions hosts.
 
+## Resource scope
+
+By default the server can reach every Logic App the signed-in identity can see. Two optional
+settings narrow that down, which keeps the assistant focused (and out of unrelated apps) when you're
+diagnosing or modernizing a specific workload:
+
+| Setting | CLI flag | Config file key | Effect |
+|---------|----------|-----------------|--------|
+| `AZURE_RESOURCE_GROUP` | `--resource-group <name>` | `resourceGroupName` | Only Logic Apps and API connections in this resource group |
+| `LOGIC_APP_NAME` | `--logic-app <name>` | `logicAppName` | Only this Logic App and the Logic Apps it calls (transitively) |
+
+Precedence is CLI flag > environment variable > config file.
+
+```json
+{
+  "servers": {
+    "logicapps": {
+      "type": "stdio",
+      "command": "logicapps-mcp",
+      "env": {
+        "AZURE_SUBSCRIPTION_ID": "00000000-0000-0000-0000-000000000000",
+        "LOGIC_APP_NAME": "la-order-intake"
+      }
+    }
+  }
+}
+```
+
+**How it behaves**
+
+- **Defaults:** `subscriptionId`, `resourceGroupName` and `logicAppName` become optional in tool
+  schemas when the scope supplies them. With `LOGIC_APP_NAME`, tools default to that app, and you can
+  name a called app (e.g. `logicAppName: "la-child"`) without its resource group.
+- **Enforcement:** calls that name a resource outside the scope fail with `OutOfScope` before any
+  Azure request is made. `list_subscriptions`, `list_logic_apps` and (with `LOGIC_APP_NAME`)
+  `get_connections` only return in-scope items. Clone targets must also be in scope.
+- **`AZURE_SUBSCRIPTION_ID`** pins the subscription when a scope is set. Without it,
+  `AZURE_RESOURCE_GROUP` matches that resource group name in any accessible subscription.
+- **`LOGIC_APP_NAME` + `AZURE_RESOURCE_GROUP`/`AZURE_SUBSCRIPTION_ID`:** the resource group and
+  subscription only *locate* the root app (needed if the name exists more than once). Called apps
+  in other resource groups or subscriptions are still in scope.
+
+**How called Logic Apps are found (`LOGIC_APP_NAME`)**
+
+On first use (and again every 10 minutes) the server reads the root app's workflow definitions and
+follows, recursively through scopes, conditions, switches and loops:
+
+- Built-in **Workflow** actions ("Choose a Logic Apps workflow"): the child's resource ID, as a literal or
+  a single `@parameters('name')` reference resolved from workflow parameters, `parameters.json`
+  (Standard) or parameter defaults.
+- **HTTP** actions that call a Logic App trigger URL (`*.logic.azure.com/workflows/<id>/triggers/...`
+  or `<site>.azurewebsites.net/api/<workflow>/triggers/...`), matched against Logic Apps in the
+  caller's subscription.
+- Every workflow in a Standard app is in scope once the app is.
+
+Discovery stops at 25 Logic Apps. Calls built from other expressions (`@concat(...)`, variables,
+app settings) can't be followed; those apps stay out of scope. `check_setup` / `--check` lists the
+resolved apps and any calls it couldn't resolve. With `LOGIC_APP_NAME`, connection tools are limited
+to API connections the scoped apps reference (when their connection references can be read).
+
+> Scope is a guard-rail for focus, not a security boundary. Use Azure RBAC to control what an identity
+> can actually access.
+
 ## Config File
 
 Alternative to environment variables. Create `~/.logicapps-mcp/config.json`:
@@ -69,6 +135,8 @@ Alternative to environment variables. Create `~/.logicapps-mcp/config.json`:
   "tenantId": "your-tenant-id",
   "clientId": "your-client-id",
   "defaultSubscriptionId": "your-subscription-id",
+  "resourceGroupName": "optional-resource-group-scope",
+  "logicAppName": "optional-logic-app-scope",
   "capabilities": []
 }
 ```
@@ -88,7 +156,7 @@ In local (stdio) mode the MCP server uses the Azure CLI's tokens, caching each u
 ### Verifying your setup
 
 Run `logicapps-mcp --check` (add the same `--allow` flags you use in your client config) to verify
-configuration, Azure CLI login, token acquisition and subscription access. It prints a remediation
+configuration, Azure CLI login, token acquisition, subscription access and resource scope. It prints a remediation
 for each problem and exits with code `1` if any check fails. The same checks run in the background
 at server startup (results go to the server log and to MCP log notifications) and are available to
 the AI assistant through the `check_setup` tool.

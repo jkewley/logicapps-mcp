@@ -21,6 +21,14 @@ operations and the tool is unavailable, tell them which capability to enable
 | `connector` | `invoke_connector_operation`, live probe in `test_connection` |
 | `secrets` | `get_trigger_callback_url` |
 
+## Resource Scope
+
+The server may be scoped with `AZURE_RESOURCE_GROUP` (one resource group) and/or `LOGIC_APP_NAME`
+(one Logic App plus the Logic Apps it calls). When scoped, `subscriptionId`, `resourceGroupName` and
+`logicAppName` may be omitted where the scope supplies them (the parameter description says so).
+Requests outside the scope fail with `OutOfScope`. Tell the user instead of trying other resources.
+`check_setup` lists the in-scope apps.
+
 **Microsoft Docs:**
 - [Logic Apps REST API reference](https://learn.microsoft.com/rest/api/logic/)
 - [Standard workflow management API](https://learn.microsoft.com/azure/logic-apps/devops-deployment-single-tenant-azure-logic-apps#workflow-management-api)
@@ -51,7 +59,7 @@ is used, or how to enable write operations.
 **Returns:** `ok`, `authMode` (`azure-cli` or `passthrough`), `summary`, and `checks[]` with
 `status` (`pass`/`warn`/`fail`/`skip`), `message`, `remediation` for: configuration,
 capabilities, Azure CLI installed, Azure CLI login (tenant/cloud mismatch), ARM token,
-subscription access.
+subscription access, resource scope (in-scope apps and unresolved calls under `details`).
 
 **Tip:** Relay `remediation` steps verbatim (e.g. "run `az login`"). After the user fixes
 login, retry the original tool — no restart needed (installing Azure CLI does need a client restart).
