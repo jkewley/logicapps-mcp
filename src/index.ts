@@ -13,6 +13,8 @@
  *   npx logicapps-mcp --http --port 8080
  *   npx logicapps-mcp --allow execute,write   # opt in to non-read-only tools
  *   npx logicapps-mcp --check                 # verify setup (az login, access) and exit
+ *   npx logicapps-mcp --resource-group my-rg  # scope tools to one resource group
+ *   npx logicapps-mcp --logic-app my-app      # scope tools to one Logic App and the apps it calls
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -24,12 +26,28 @@ import { setCacheTtl } from "./tools/index.js";
 import { registerToolsAndPrompts } from "./server.js";
 import { runSetupChecks, formatSetupReport } from "./setup/checks.js";
 import { VERSION } from "./version.js";
+import { setScope, describeScope } from "./scope/scope.js";
 
-async function initLocal(cliCapabilities: string[], announce = true): Promise<void> {
-  const settings = await loadSettings({ cliCapabilities });
+interface CliOptions {
+  allow: string[];
+  resourceGroup?: string;
+  logicApp?: string;
+}
+
+async function initLocal(cli: CliOptions, announce = true): Promise<void> {
+  const settings = await loadSettings({
+    cliCapabilities: cli.allow,
+    cliResourceGroup: cli.resourceGroup,
+    cliLogicAppName: cli.logicApp,
+  });
   setSettings(settings);
   setCacheTtl(settings.cacheTtlSeconds);
   setEnabledCapabilities(settings.capabilities);
+  setScope({
+    subscriptionId: settings.defaultSubscriptionId,
+    resourceGroupName: settings.resourceGroupName,
+    logicAppName: settings.logicAppName,
+  });
   // Local stdio mode uses the signed-in Azure CLI identity (az login)
   enableAzureCliAuth(true);
   if (announce) await initializeAuth();
@@ -38,8 +56,8 @@ async function initLocal(cliCapabilities: string[], announce = true): Promise<vo
 /**
  * Run setup checks, print a report and exit (non-zero if any check failed).
  */
-async function runCheckMode(cliCapabilities: string[]): Promise<void> {
-  await initLocal(cliCapabilities, false);
+async function runCheckMode(cli: CliOptions): Promise<void> {
+  await initLocal(cli, false);
   const report = await runSetupChecks();
   console.log(formatSetupReport(report));
   process.exit(report.ok ? 0 : 1);
@@ -48,9 +66,10 @@ async function runCheckMode(cliCapabilities: string[]): Promise<void> {
 /**
  * Run MCP server in stdio mode (for local MCP clients).
  */
-async function runStdioMode(cliCapabilities: string[]): Promise<void> {
-  await initLocal(cliCapabilities);
+async function runStdioMode(cli: CliOptions): Promise<void> {
+  await initLocal(cli);
   console.error(`Enabled capabilities: ${getEnabledCapabilities().join(", ")}`);
+  console.error(`Resource scope: ${describeScope()}`);
 
   const mcpServer = new McpServer(
     { name: "logicapps-mcp", version: VERSION },
@@ -110,16 +129,19 @@ async function reportStartupChecks(mcpServer: McpServer, initialized: Promise<vo
 /**
  * Run MCP server in HTTP mode (for cloud deployment).
  */
-async function runHttpMode(port: number, cliCapabilities: string[]): Promise<void> {
+async function runHttpMode(port: number, cli: CliOptions): Promise<void> {
   // Dynamic import to avoid loading Express in stdio mode
   const { startHttpServer } = await import("./http/index.js");
-  await startHttpServer(port, cliCapabilities);
+  await startHttpServer(port, cli.allow, {
+    resourceGroup: cli.resourceGroup,
+    logicApp: cli.logicApp,
+  });
 }
 
 /**
  * Parse command line arguments.
  */
-function parseArgs(): { mode: "stdio" | "http" | "check"; port: number; allow: string[] } {
+function parseArgs(): { mode: "stdio" | "http" | "check"; port: number; cli: CliOptions } {
   const args = process.argv.slice(2);
   const isHttp = args.includes("--http");
   const isCheck = args.includes("--check");
@@ -145,22 +167,29 @@ function parseArgs(): { mode: "stdio" | "http" | "check"; port: number; allow: s
     }
   });
 
+  const valueOf = (flag: string): string | undefined => {
+    const i = args.indexOf(flag);
+    if (i !== -1 && args[i + 1] && !args[i + 1].startsWith("--")) return args[i + 1];
+    const eqArg = args.find((a) => a.startsWith(`${flag}=`));
+    return eqArg?.slice(flag.length + 1);
+  };
+
   return {
     mode: isCheck ? "check" : isHttp ? "http" : "stdio",
     port,
-    allow,
+    cli: { allow, resourceGroup: valueOf("--resource-group"), logicApp: valueOf("--logic-app") },
   };
 }
 
 async function main(): Promise<void> {
-  const { mode, port, allow } = parseArgs();
+  const { mode, port, cli } = parseArgs();
 
   if (mode === "check") {
-    await runCheckMode(allow);
+    await runCheckMode(cli);
   } else if (mode === "http") {
-    await runHttpMode(port, allow);
+    await runHttpMode(port, cli);
   } else {
-    await runStdioMode(allow);
+    await runStdioMode(cli);
   }
 }
 

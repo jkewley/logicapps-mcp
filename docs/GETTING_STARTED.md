@@ -52,8 +52,8 @@ az login
 logicapps-mcp --check     # or: npx -y logicapps-mcp --check
 ```
 
-`--check` verifies the configuration, Azure CLI installation and login, token acquisition and
-subscription access, prints a fix for anything that is wrong, and exits non-zero on failure:
+`--check` verifies the configuration, Azure CLI installation and login, token acquisition,
+subscription access and [resource scope](CONFIGURATION.md#resource-scope), prints a fix for anything that is wrong, and exits non-zero on failure:
 
 ```
 $ logicapps-mcp --check
@@ -66,6 +66,7 @@ logicapps-mcp setup check (azure-cli auth)
       → Run 'az login' in a terminal, then retry (no server restart needed).
   – Azure Resource Manager token: Skipped: Azure CLI login failed
   – Subscription access: Skipped: no Azure token
+  – Resource scope: Skipped: no subscription access
 Setup has 1 problem(s). Most tools will fail until fixed.
 ```
 
@@ -201,6 +202,8 @@ The server runs the same setup checks in the background every time it starts:
 | Signed in to the wrong tenant | `az login --tenant <AZURE_TENANT_ID>` |
 | Azure CLI using a different cloud | `az cloud set --name AzureUSGovernment` (or `AzureChinaCloud`) then `az login` |
 | No subscriptions visible | Ask for `Reader`/`Logic App Operator` on the subscription or resource group |
+| `OutOfScope` errors | The server is scoped by `AZURE_RESOURCE_GROUP` / `LOGIC_APP_NAME`; widen or remove the scope (see [Resource scope](CONFIGURATION.md#resource-scope)) |
+| Scope check fails: `LOGIC_APP_NAME ... matches N Logic Apps` | Also set `AZURE_SUBSCRIPTION_ID` and/or `AZURE_RESOURCE_GROUP` |
 | Config file ignored | Fix the JSON in `~/.logicapps-mcp/config.json` (reported as a warning) |
 
 ## Cloud MCP Server Setup

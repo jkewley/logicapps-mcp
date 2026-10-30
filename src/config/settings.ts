@@ -13,6 +13,10 @@ export interface LogicAppsMcpSettings {
   clientId: string;
   cloud: AzureCloudEndpoints;
   defaultSubscriptionId?: string;
+  /** Restrict tools to Logic Apps in this resource group (AZURE_RESOURCE_GROUP). */
+  resourceGroupName?: string;
+  /** Restrict tools to this Logic App and the Logic Apps it calls (LOGIC_APP_NAME). */
+  logicAppName?: string;
   logLevel: "debug" | "info" | "warn" | "error";
   cacheTtlSeconds: number;
   /** Enabled tool capabilities. "read" is always present; everything else is opt-in. */
@@ -31,6 +35,8 @@ interface ConfigFile {
   defaultSubscriptionId?: string;
   customCloud?: AzureCloudEndpoints;
   capabilities?: string[];
+  resourceGroupName?: string;
+  logicAppName?: string;
 }
 
 const DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"; // Azure CLI public client ID
@@ -39,7 +45,7 @@ const DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"; // Azure CLI p
  * Load settings. Capability precedence: CLI --allow > LOGICAPPS_MCP_CAPABILITIES > config file.
  */
 export async function loadSettings(
-  options: { cliCapabilities?: string[] } = {}
+  options: { cliCapabilities?: string[]; cliResourceGroup?: string; cliLogicAppName?: string } = {}
 ): Promise<LogicAppsMcpSettings> {
   const warnings: string[] = [];
   const configFilePath = join(homedir(), ".logicapps-mcp", "config.json");
@@ -118,11 +124,45 @@ export async function loadSettings(
     }
   }
 
+  const pickName = (
+    cli: string | undefined,
+    envName: string,
+    config: unknown,
+    pattern: RegExp,
+    label: string
+  ): string | undefined => {
+    const raw = cli ?? process.env[envName] ?? (typeof config === "string" ? config : undefined);
+    const value = raw?.trim();
+    if (!value) return undefined;
+    if (!pattern.test(value)) {
+      warnings.push(`${envName}='${value}' is not a valid ${label} name; scoping by it is disabled.`);
+      return undefined;
+    }
+    return value;
+  };
+  const resourceGroupName = pickName(
+    options.cliResourceGroup,
+    "AZURE_RESOURCE_GROUP",
+    configFile.resourceGroupName,
+    /^[-\w._()]{1,90}$/,
+    "resource group"
+  );
+  const logicAppName = pickName(
+    options.cliLogicAppName,
+    "LOGIC_APP_NAME",
+    configFile.logicAppName,
+    /^[-\w._()]{1,80}$/,
+    "Logic App"
+  );
+
   return {
     tenantId: process.env.AZURE_TENANT_ID ?? configFile.tenantId ?? "common",
     clientId: process.env.AZURE_CLIENT_ID ?? configFile.clientId ?? DEFAULT_CLIENT_ID,
     cloud,
-    defaultSubscriptionId: process.env.AZURE_SUBSCRIPTION_ID ?? configFile.defaultSubscriptionId,
+    defaultSubscriptionId:
+      process.env.AZURE_SUBSCRIPTION_ID?.trim() || configFile.defaultSubscriptionId || undefined,
+    resourceGroupName,
+    logicAppName,
     logLevel,
     cacheTtlSeconds,
     capabilities,

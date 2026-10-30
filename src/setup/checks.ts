@@ -4,6 +4,9 @@
  * by the `check_setup` tool.
  */
 
+import { getScope, isScoped, describeScope, resolveLogicAppScope } from "../scope/scope.js";
+import { MAX_SCOPED_APPS } from "../scope/callGraph.js";
+import { listLogicApps } from "../tools/logicApps.js";
 import {
   getAccessToken,
   getAzureCliAccount,
@@ -24,6 +27,7 @@ export interface SetupCheck {
   status: CheckStatus;
   message: string;
   remediation?: string;
+  details?: unknown;
 }
 
 export interface SetupReport {
@@ -261,6 +265,10 @@ export async function runSetupChecks(): Promise<SetupReport> {
     }
   }
 
+  // 7. Resource scope (AZURE_RESOURCE_GROUP / LOGIC_APP_NAME)
+  const subsOk = checks.some((c) => c.id === "subscription-access" && c.status !== "fail" && c.status !== "skip");
+  checks.push(await checkScope(subsOk));
+
   const failed = checks.filter((c) => c.status === "fail").length;
   const warned = checks.filter((c) => c.status === "warn").length;
   const summary =
@@ -277,6 +285,76 @@ export async function runSetupChecks(): Promise<SetupReport> {
     checks,
     summary,
   };
+}
+
+async function checkScope(canQuery: boolean): Promise<SetupCheck> {
+  const id = "resource-scope";
+  const title = "Resource scope";
+  const scope = getScope();
+  if (!isScoped()) {
+    return {
+      id,
+      title,
+      status: "pass",
+      message: `No resource scope: tools can reach every Logic App this identity can see${
+        scope.subscriptionId ? ` (default subscription ${scope.subscriptionId})` : ""
+      }.`,
+      remediation: "Optional: set AZURE_RESOURCE_GROUP and/or LOGIC_APP_NAME to restrict the server.",
+    };
+  }
+  if (!canQuery) return skipped(id, title, "no subscription access");
+
+  try {
+    if (scope.logicAppName) {
+      const graph = await resolveLogicAppScope({ refresh: true });
+      const problems: string[] = [];
+      if (graph.unresolved.length) problems.push(`${graph.unresolved.length} call(s) could not be resolved`);
+      if (graph.truncated) problems.push(`discovery stopped at ${MAX_SCOPED_APPS} Logic Apps`);
+      return {
+        id,
+        title,
+        status: problems.length ? "warn" : "pass",
+        message: `Scoped to ${graph.apps.length} Logic App(s): ${graph.apps
+          .map((a) => `${a.resourceGroupName}/${a.logicAppName}`)
+          .join(", ")}.${problems.length ? ` Note: ${problems.join("; ")}.` : ""}`,
+        remediation: problems.length
+          ? "Calls built from dynamic expressions or app settings can't be followed. Those Logic Apps stay out of scope."
+          : undefined,
+        details: { apps: graph.apps, unresolved: graph.unresolved, truncated: graph.truncated },
+      };
+    }
+
+    const rg = scope.resourceGroupName!;
+    if (!scope.subscriptionId) {
+      return {
+        id,
+        title,
+        status: "pass",
+        message: `Scoped to resource group '${rg}' in any accessible subscription.`,
+        remediation: "Set AZURE_SUBSCRIPTION_ID to pin the subscription and make it the default.",
+      };
+    }
+    const { logicApps } = await listLogicApps(scope.subscriptionId, rg, "all");
+    return {
+      id,
+      title,
+      status: logicApps.length ? "pass" : "warn",
+      message: `Scoped to resource group '${rg}' (${logicApps.length} Logic App(s)).`,
+      remediation: logicApps.length
+        ? undefined
+        : "No Logic Apps found there. Check AZURE_RESOURCE_GROUP and AZURE_SUBSCRIPTION_ID.",
+    };
+  } catch (error) {
+    const msg = errorMessage(error);
+    return {
+      id,
+      title,
+      status: "fail",
+      message: `Could not resolve scope ${describeScope()}: ${msg}`,
+      remediation:
+        "Check LOGIC_APP_NAME / AZURE_RESOURCE_GROUP / AZURE_SUBSCRIPTION_ID. All tools that take a resource will fail until this resolves.",
+    };
+  }
 }
 
 const ICONS: Record<CheckStatus, string> = { pass: "✔", warn: "⚠", fail: "✖", skip: "–" };

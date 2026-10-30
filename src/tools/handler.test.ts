@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { handleToolCall } from "./handler.js";
 import { setEnabledCapabilities } from "./capabilities.js";
 import { McpError } from "../utils/errors.js";
+import { setScope } from "../scope/scope.js";
 
 // Mock all tool implementations
 vi.mock("./subscriptions.js", () => ({
@@ -39,6 +40,41 @@ describe("handleToolCall", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setEnabledCapabilities([]);
+  });
+
+  it("enforces AZURE_RESOURCE_GROUP scope before calling Azure", async () => {
+    setScope({ subscriptionId: "sub-1", resourceGroupName: "rg-a" });
+    try {
+      const denied = await handleToolCall("get_connections", { resourceGroupName: "rg-b" });
+      expect(denied.isError).toBe(true);
+      expect(JSON.parse((denied.content[0] as { text: string }).text).error.code).toBe("OutOfScope");
+      expect(getConnections).not.toHaveBeenCalled();
+
+      vi.mocked(getConnections).mockResolvedValue({ connections: [] });
+      const ok = await handleToolCall("get_connections", {});
+      expect(ok.isError).toBeUndefined();
+      expect(getConnections).toHaveBeenCalledWith("sub-1", "rg-a");
+    } finally {
+      setScope({});
+    }
+  });
+
+  it("filters list_logic_apps results to the scoped resource group", async () => {
+    setScope({ resourceGroupName: "rg-a" });
+    try {
+      vi.mocked(listLogicApps).mockResolvedValue({
+        logicApps: [
+          { name: "a", resourceGroup: "rg-a" },
+          { name: "b", resourceGroup: "rg-b" },
+        ],
+      } as never);
+      const result = await handleToolCall("list_logic_apps", { subscriptionId: "s" });
+      expect(listLogicApps).toHaveBeenCalledWith("s", "rg-a", undefined);
+      const body = JSON.parse((result.content[0] as { text: string }).text);
+      expect(body.logicApps.map((a: { name: string }) => a.name)).toEqual(["a"]);
+    } finally {
+      setScope({});
+    }
   });
 
   it("points authentication errors at check_setup", async () => {

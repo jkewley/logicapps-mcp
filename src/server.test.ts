@@ -123,6 +123,27 @@ describe("server", () => {
       expect(tool).toBeDefined();
     });
 
+    it("should make scope-supplied parameters optional in advertised schemas", async () => {
+      const { setScope } = await import("./scope/scope.js");
+      const handler = toolHandlers.get(ListToolsRequestSchema);
+      const find = async () =>
+        ((await handler!()) as {
+          tools: Array<{
+            name: string;
+            inputSchema: { required?: string[]; properties: Record<string, { description?: string }> };
+          }>;
+        }).tools.find((t) => t.name === "list_run_history")!;
+      try {
+        expect((await find()).inputSchema.required).toContain("resourceGroupName");
+        setScope({ subscriptionId: "sub-1", resourceGroupName: "rg-a" });
+        const tool = await find();
+        expect(tool.inputSchema.required).toEqual(["logicAppName"]);
+        expect(tool.inputSchema.properties.resourceGroupName.description).toContain("resource group 'rg-a'");
+      } finally {
+        setScope({});
+      }
+    });
+
     it("should hide opt-in tools by default (read-only)", async () => {
       const { setEnabledCapabilities } = await import("./tools/capabilities.js");
       setEnabledCapabilities([]);

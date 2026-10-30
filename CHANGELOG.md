@@ -13,6 +13,8 @@
 - `test_connection` only reports status unless `connector` is enabled (the live probe calls the backend).
 
 ### Added
+- Resource scope: `AZURE_RESOURCE_GROUP` / `--resource-group` limits the server to one resource group, and `LOGIC_APP_NAME` / `--logic-app` limits it to one Logic App plus the Logic Apps it calls (via Workflow actions and HTTP calls to Logic App trigger URLs, followed transitively). Scoped parameters become optional, out-of-scope requests fail with `OutOfScope`, list results are filtered, and `check_setup` reports the resolved apps.
+- `AZURE_SUBSCRIPTION_ID` / `defaultSubscriptionId` is now actually used as the default `subscriptionId` for tools.
 - Setup diagnostics: `logicapps-mcp --check` CLI flag, background checks at stdio startup (server log + MCP log notifications), and a `check_setup` tool. Detects missing/unauthenticated Azure CLI, expired login, tenant/cloud mismatch, invalid config, and subscription access problems, with remediation steps. Authentication errors from other tools point to `check_setup`.
 - Config problems (malformed config file, invalid log level or cache TTL) are reported as warnings instead of being silently ignored.
 - `analyze_run_failures`: groups recent failed runs by failing action and error code, ranking root causes over propagated failures.

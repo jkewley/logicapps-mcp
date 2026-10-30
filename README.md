@@ -67,12 +67,20 @@ Out of the box the server only **reads**: it can inspect workflows, run history 
 
 Capabilities: `execute` (run/resubmit/cancel), `write` (create/update/delete/enable/disable/clone, create connections), `connector` (live connector calls), `secrets` (trigger callback URLs), or `all`. You can also set `LOGICAPPS_MCP_CAPABILITIES`. See [Configuration](docs/CONFIGURATION.md#capabilities-read-only-by-default).
 
+### Focus on one resource group or Logic App
+
+Set `AZURE_RESOURCE_GROUP` and/or `LOGIC_APP_NAME` (or `--resource-group` / `--logic-app`) to scope
+every tool to that resource group, or to one Logic App plus the Logic Apps it calls. Scoped
+parameters become optional, and out-of-scope requests are rejected. See
+[Resource scope](docs/CONFIGURATION.md#resource-scope).
+
 > **Cloud MCP Server**: Need a hosted deployment? See the [Getting Started Guide](docs/GETTING_STARTED.md#cloud-mcp-server-setup) for Azure deployment instructions.
 
 ## Features
 
 - **43 Tools** for Logic Apps operations: list, debug, document, create, update, delete workflows
 - **Safe by default**: read-only unless you opt in to `execute`, `write`, `connector` or `secrets`
+- **Resource scope**: optionally limit the server to a resource group or to one Logic App and the apps it calls
 - **Setup diagnostics**: `--check` and the `check_setup` tool report missing `az login`, tenant/cloud mismatches, config errors and access problems with fixes
 - **Dual SKU Support**: Works with both Consumption and Standard Logic Apps
 - **Run Debugging**: Trace failures through actions, loops (per-iteration I/O), and scopes

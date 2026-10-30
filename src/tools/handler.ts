@@ -54,6 +54,7 @@ import {
 import { McpError, formatError } from "../utils/errors.js";
 import { TOOL_SCHEMAS } from "./schemas.js";
 import { assertToolAllowed } from "./capabilities.js";
+import { applyScope, filterScopedResult } from "../scope/scope.js";
 import { runSetupChecks } from "../setup/checks.js";
 
 /**
@@ -91,6 +92,9 @@ export async function handleToolCall(
 
     // Enforce capability policy before any validation or Azure call.
     assertToolAllowed(name);
+
+    // Fill server-scope defaults and reject resources outside AZURE_RESOURCE_GROUP / LOGIC_APP_NAME.
+    args = await applyScope(name, args);
 
     switch (name) {
       case "check_setup":
@@ -317,6 +321,8 @@ export async function handleToolCall(
       default:
         throw new McpError("InvalidTool", `Unknown tool: ${name}`);
     }
+
+    result = await filterScopedResult(name, args, result);
 
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

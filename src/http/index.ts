@@ -14,11 +14,13 @@ import { registerToolsAndPrompts } from "../server.js";
 import { loadSettings } from "../config/index.js";
 import { setSettings, initializeAuth, runWithToken } from "../auth/index.js";
 import { setEnabledCapabilities } from "../tools/capabilities.js";
+import { setScope } from "../scope/scope.js";
 import { setCacheTtl } from "../tools/index.js";
 import { VERSION } from "../version.js";
 
 let initialized = false;
 let cliCapabilities: string[] = [];
+let cliScope: { resourceGroup?: string; logicApp?: string } = {};
 
 /**
  * Initialize auth and settings (called once on cold start).
@@ -26,10 +28,19 @@ let cliCapabilities: string[] = [];
 async function ensureInitialized(): Promise<void> {
   if (initialized) return;
 
-  const settings = await loadSettings({ cliCapabilities });
+  const settings = await loadSettings({
+    cliCapabilities,
+    cliResourceGroup: cliScope.resourceGroup,
+    cliLogicAppName: cliScope.logicApp,
+  });
   setSettings(settings);
   setCacheTtl(settings.cacheTtlSeconds);
   setEnabledCapabilities(settings.capabilities);
+  setScope({
+    subscriptionId: settings.defaultSubscriptionId,
+    resourceGroupName: settings.resourceGroupName,
+    logicAppName: settings.logicAppName,
+  });
   await initializeAuth();
   initialized = true;
 }
@@ -127,9 +138,11 @@ export function createMcpApp(): express.Application {
  */
 export async function startHttpServer(
   port: number = 3000,
-  allow: string[] = []
+  allow: string[] = [],
+  scope: { resourceGroup?: string; logicApp?: string } = {}
 ): Promise<void> {
   cliCapabilities = allow;
+  cliScope = scope;
   // Fail fast on invalid capability configuration
   await ensureInitialized();
   const app = createMcpApp();

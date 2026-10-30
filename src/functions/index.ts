@@ -23,6 +23,7 @@ import {
   runWithToken,
 } from "../auth/index.js";
 import { setEnabledCapabilities } from "../tools/capabilities.js";
+import { setScope } from "../scope/scope.js";
 import { setCacheTtl } from "../tools/index.js";
 import { VERSION } from "../version.js";
 
@@ -38,6 +39,11 @@ async function ensureInitialized(): Promise<void> {
   setSettings(settings);
   setCacheTtl(settings.cacheTtlSeconds);
   setEnabledCapabilities(settings.capabilities);
+  setScope({
+    subscriptionId: settings.defaultSubscriptionId,
+    resourceGroupName: settings.resourceGroupName,
+    logicAppName: settings.logicAppName,
+  });
   await initializeAuth();
   initialized = true;
 }
