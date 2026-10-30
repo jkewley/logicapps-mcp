@@ -43,11 +43,30 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export interface RetryOptions {
+  /**
+   * Whether the request is safe to replay. Defaults to true for GET/PUT/DELETE/HEAD
+   * and false for POST/PATCH. Non-idempotent requests are only retried on 429,
+   * where the service guarantees the request was not processed.
+   */
+  idempotent?: boolean;
+}
+
+function isIdempotentMethod(method: string | undefined): boolean {
+  const m = (method ?? "GET").toUpperCase();
+  return m !== "POST" && m !== "PATCH";
+}
+
 /**
  * Fetch with retry logic, exponential backoff, and timeout.
  */
-export async function fetchWithRetry(url: string, options: RequestInit): Promise<Response> {
+export async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retryOptions: RetryOptions = {}
+): Promise<Response> {
   let lastError: Error | undefined;
+  const idempotent = retryOptions.idempotent ?? isIdempotentMethod(options.method);
 
   for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
     const controller = new AbortController();
@@ -68,6 +87,12 @@ export async function fetchWithRetry(url: string, options: RequestInit): Promise
 
       // Non-retryable error - return immediately
       if (!RETRYABLE_STATUS_CODES.has(response.status)) {
+        return response;
+      }
+
+      // Non-idempotent operations (e.g. run_trigger, resubmit) may already have taken
+      // effect on 5xx/408, so only retry when throttled.
+      if (!idempotent && response.status !== 429) {
         return response;
       }
 
@@ -107,8 +132,8 @@ export async function fetchWithRetry(url: string, options: RequestInit): Promise
         lastError = error instanceof Error ? error : new Error(String(error));
       }
 
-      // Network errors are retryable - continue if not last attempt
-      if (attempt >= retryConfig.maxRetries) {
+      // Network errors are retryable for idempotent requests only
+      if (attempt >= retryConfig.maxRetries || !idempotent) {
         throw lastError;
       }
 
@@ -140,6 +165,7 @@ export async function armRequest<T>(
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     body?: unknown;
     queryParams?: Record<string, string>;
+    idempotent?: boolean;
   } = {}
 ): Promise<T> {
   const response = await armRequestRaw(path, options);
@@ -177,6 +203,7 @@ export async function armRequestVoid(
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     body?: unknown;
     queryParams?: Record<string, string>;
+    idempotent?: boolean;
   } = {}
 ): Promise<void> {
   await armRequestRaw(path, options);
@@ -192,6 +219,7 @@ async function armRequestRaw(
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     body?: unknown;
     queryParams?: Record<string, string>;
+    idempotent?: boolean;
   } = {}
 ): Promise<Response> {
   const cloud = getCloudEndpoints();
@@ -204,14 +232,18 @@ async function armRequestRaw(
     url += (url.includes("?") ? "&" : "?") + params.toString();
   }
 
-  const response = await fetchWithRetry(url, {
-    method: options.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+  const response = await fetchWithRetry(
+    url,
+    {
+      method: options.method ?? "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
     },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+    { idempotent: options.idempotent }
+  );
 
   if (!response.ok) {
     await handleArmError(response);
@@ -235,7 +267,8 @@ export async function armRequestAllPages<T>(
       response = await armRequest<ArmResponse<T>>(path, { queryParams });
       isFirstRequest = false;
     } else {
-      // nextLink is a full URL, fetch directly with retry
+      // nextLink is a full URL; never send the bearer token to an untrusted host
+      assertTrustedNextLink(nextLink!, getCloudEndpoints().resourceManager);
       const token = await getAccessToken();
       const res = await fetchWithRetry(nextLink!, {
         headers: {
@@ -258,6 +291,27 @@ export async function armRequestAllPages<T>(
   return results;
 }
 
+/**
+ * Ensure a server-provided pagination link points at the expected host before
+ * attaching credentials to it.
+ */
+export function assertTrustedNextLink(nextLink: string, expectedBase: string): void {
+  let actual: URL;
+  let expected: URL;
+  try {
+    actual = new URL(nextLink);
+    expected = new URL(expectedBase.includes("://") ? expectedBase : `https://${expectedBase}`);
+  } catch {
+    throw new McpError("ServiceError", "Invalid pagination link returned by service");
+  }
+  if (actual.protocol !== "https:" || actual.host.toLowerCase() !== expected.host.toLowerCase()) {
+    throw new McpError(
+      "ServiceError",
+      `Refusing to follow pagination link to unexpected host '${actual.host}'`
+    );
+  }
+}
+
 export async function workflowMgmtRequest<T>(
   logicAppHostname: string,
   path: string,
@@ -265,18 +319,23 @@ export async function workflowMgmtRequest<T>(
   options: {
     method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     body?: unknown;
+    idempotent?: boolean;
   } = {}
 ): Promise<T> {
   const url = `https://${logicAppHostname}${path}`;
 
-  const response = await fetchWithRetry(url, {
-    method: options.method ?? "GET",
-    headers: {
-      "x-functions-key": masterKey,
-      "Content-Type": "application/json",
+  const response = await fetchWithRetry(
+    url,
+    {
+      method: options.method ?? "GET",
+      headers: {
+        "x-functions-key": masterKey,
+        "Content-Type": "application/json",
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
     },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+    { idempotent: options.idempotent }
+  );
 
   if (!response.ok) {
     const error = (await response.json().catch(() => ({}))) as {
@@ -304,6 +363,7 @@ export async function workflowMgmtRequestAllPages<T>(
   let url: string | undefined = `https://${logicAppHostname}${path}`;
 
   while (url) {
+    assertTrustedNextLink(url, logicAppHostname);
     const response = await fetchWithRetry(url, {
       method: "GET",
       headers: {
@@ -402,4 +462,30 @@ async function handleArmError(response: Response): Promise<never> {
     default:
       throw new McpError(code, message);
   }
+}
+
+/**
+ * Read a JSON file from the Standard Logic App VFS. Returns null if the file does not exist.
+ */
+export async function vfsReadJson<T>(
+  logicAppHostname: string,
+  path: string,
+  masterKey: string
+): Promise<T | null> {
+  const response = await fetchWithRetry(`https://${logicAppHostname}${path}`, {
+    method: "GET",
+    headers: { "x-functions-key": masterKey },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new McpError(
+      "ServiceError",
+      `VFS API error: ${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ""}`
+    );
+  }
+  return (await response.json()) as T;
 }

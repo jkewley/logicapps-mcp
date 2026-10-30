@@ -120,7 +120,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "list_run_history",
     description:
-      "Get the run history for a workflow with optional filtering. For Standard SKU, workflowName is required. Use search_runs for easier filtering by status/date. After finding a run, use get_run_details and get_run_actions to debug. Returns a nextLink if more pages are available - use skipToken to fetch the next page.",
+      "Get the run history for a workflow with optional filtering. For Standard SKU, workflowName is required. Use search_runs for easier filtering by status/date. After finding a run, use get_run_details and get_run_actions to debug. Returns skipToken/hasMore when more history is available - pass skipToken to continue. clientTrackingId searches scan up to 10 pages per call and return a skipToken to resume scanning.",
     inputSchema: {
       type: "object",
       properties: {
@@ -667,7 +667,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "get_action_io",
     description:
-      "Get the actual input/output data for a run action. Fetches content from inputsLink/outputsLink URLs. For Standard SKU, workflowName is required. Essential for debugging data transformation issues.",
+      "Get the actual input/output data for a run action. Fetches content from inputsLink/outputsLink URLs. For actions inside loops (ForEach/Until), pass repetitionName (from get_action_repetitions) to get a specific iteration. For Standard SKU, workflowName is required. Essential for debugging data transformation issues.",
     inputSchema: {
       type: "object",
       properties: {
@@ -700,6 +700,11 @@ export const TOOL_DEFINITIONS: Tool[] = [
           enum: ["inputs", "outputs", "both"],
           description: "Which content to fetch (default: both)",
         },
+        repetitionName: {
+          type: "string",
+          description:
+            "Loop iteration to fetch (e.g., '000000'). Use get_action_repetitions to list iterations.",
+        },
       },
       required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId", "actionName"],
     },
@@ -707,7 +712,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "search_runs",
     description:
-      "Search run history with friendly parameters (status, startTime, endTime, clientTrackingId) instead of raw OData filter syntax. For Standard SKU, workflowName is required. Use this instead of list_run_history when filtering by specific criteria. Returns a nextLink if more pages are available - use skipToken to fetch the next page.",
+      "Search run history with friendly parameters (status, startTime, endTime, clientTrackingId) instead of raw OData filter syntax. For Standard SKU, workflowName is required. Use this instead of list_run_history when filtering by specific criteria. Returns skipToken/hasMore when more history is available - pass skipToken to continue. clientTrackingId searches scan up to 10 pages per call and return a skipToken to resume scanning.",
     inputSchema: {
       type: "object",
       properties: {
@@ -755,6 +760,102 @@ export const TOOL_DEFINITIONS: Tool[] = [
         },
       },
       required: ["subscriptionId", "resourceGroupName", "logicAppName"],
+    },
+  },
+  {
+    name: "analyze_run_failures",
+    description:
+      "Analyze failed runs in a time window and group failures by action and error code to identify the dominant root causes. " +
+      "Distinguishes root-cause failures from failures that merely propagated from child actions (ActionFailed). " +
+      "Returns counts, sample run IDs, first/last seen times, and suggested next steps. Read-only. " +
+      "Start here when diagnosing recurring or intermittent workflow failures. For Standard SKU, workflowName is required.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subscriptionId: {
+          type: "string",
+          description: "Azure subscription ID",
+        },
+        resourceGroupName: {
+          type: "string",
+          description: "Resource group name",
+        },
+        logicAppName: {
+          type: "string",
+          description: "Logic App resource name",
+        },
+        workflowName: {
+          type: "string",
+          description: "Workflow name (required for Standard SKU)",
+        },
+        startTime: {
+          type: "string",
+          description: "Only analyze runs that started at or after this ISO timestamp",
+        },
+        endTime: {
+          type: "string",
+          description: "Only analyze runs that started at or before this ISO timestamp",
+        },
+        maxRuns: {
+          type: "number",
+          description: "Maximum number of most recent failed runs to analyze (default: 25, max: 50)",
+        },
+      },
+      required: ["subscriptionId", "resourceGroupName", "logicAppName"],
+    },
+  },
+  {
+    name: "extract_run_test_data",
+    description:
+      "Extract test data from a historical run: trigger outputs and per-action status/outputs shaped like Logic Apps Automated Test SDK " +
+      "TriggerMock/ActionMock, recorded inputs for assertions, and expected run/action statuses. " +
+      "Use it to build regression fixtures when modernizing or fixing legacy workflows (e.g., pick one succeeded and one failed run). " +
+      "Secrets (auth headers, keys, tokens, passwords, SAS signatures) are redacted by default and large payloads are truncated. " +
+      "Read-only. For Standard SKU, workflowName is required.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subscriptionId: {
+          type: "string",
+          description: "Azure subscription ID",
+        },
+        resourceGroupName: {
+          type: "string",
+          description: "Resource group name",
+        },
+        logicAppName: {
+          type: "string",
+          description: "Logic App resource name",
+        },
+        workflowName: {
+          type: "string",
+          description: "Workflow name (required for Standard SKU)",
+        },
+        runId: {
+          type: "string",
+          description: "Run ID to extract",
+        },
+        actionNames: {
+          type: "array",
+          items: { type: "string" },
+          description: "Only extract these actions (default: all actions in the run)",
+        },
+        includeInputs: {
+          type: "boolean",
+          description: "Include trigger and action inputs (default: true)",
+        },
+        redact: {
+          type: "boolean",
+          description:
+            "Redact secrets from payloads (default: true). Only disable for non-sensitive test environments.",
+        },
+        maxPayloadBytes: {
+          type: "number",
+          description:
+            "Per-payload size limit in bytes; larger payloads are replaced with a preview (default: 32768, max: 1048576)",
+        },
+      },
+      required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId"],
     },
   },
   {
@@ -810,7 +911,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "test_connection",
     description:
-      "Test if an API connection is valid and working. Checks connection status and validates authentication. Use this to diagnose connector failures in workflow runs.",
+      "Test if an API connection is valid and working. Checks connection status and validates authentication. Active probes through the connector (testLinks) only run when the 'connector' capability is enabled; otherwise the reported status is returned. Use this to diagnose connector failures in workflow runs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -984,7 +1085,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "create_workflow",
     description:
-      "Create a new workflow. For Consumption SKU, creates a new Logic App resource. For Standard SKU, creates a new workflow within an existing Logic App. Requires a valid workflow definition JSON that follows the Logic Apps schema. IMPORTANT: When adding connector actions (e.g., SQL, Service Bus, MSN Weather), use get_connector_swagger first to discover the correct action paths and schemas. For Consumption SKU with connector actions, use the 'connections' parameter to wire up API connections.",
+      "Create a new workflow. For Consumption SKU, creates a new Logic App resource. For Standard SKU, creates a new workflow within an existing Logic App. Fails with ConflictError if the target already exists (use update_workflow instead). Requires a valid workflow definition JSON that follows the Logic Apps schema. IMPORTANT: When adding connector actions (e.g., SQL, Service Bus, MSN Weather), use get_connector_swagger first to discover the correct action paths and schemas. For Consumption SKU with connector actions, use the 'connections' parameter to wire up API connections.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1017,6 +1118,12 @@ export const TOOL_DEFINITIONS: Tool[] = [
           type: "string",
           enum: ["Stateful", "Stateless"],
           description: "Workflow kind for Standard SKU (default: 'Stateful')",
+        },
+        state: {
+          type: "string",
+          enum: ["Enabled", "Disabled"],
+          description:
+            "Initial state for a new Consumption Logic App (default: 'Enabled'). Use 'Disabled' to create without activating triggers.",
         },
         connections: {
           type: "object",
@@ -1072,7 +1179,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
         kind: {
           type: "string",
           enum: ["Stateful", "Stateless"],
-          description: "Workflow kind for Standard SKU (default: 'Stateful')",
+          description: "Workflow kind for Standard SKU (default: preserve the existing workflow's kind)",
         },
         connections: {
           type: "object",

@@ -1,9 +1,28 @@
 import { describe, it, expect } from "vitest";
 import { TOOL_DEFINITIONS } from "./definitions.js";
+import { TOOL_POLICIES } from "./capabilities.js";
+import { TOOL_SCHEMAS } from "./schemas.js";
 
 describe("tool definitions", () => {
-  it("should have all 40 tools with unique names and required schema properties", () => {
-    expect(TOOL_DEFINITIONS).toHaveLength(40);
+  it("should classify every tool with a capability and have a schema for it", () => {
+    const names = TOOL_DEFINITIONS.map((t) => t.name).sort();
+    expect(Object.keys(TOOL_POLICIES).sort()).toEqual(names);
+    expect(Object.keys(TOOL_SCHEMAS).sort()).toEqual(names);
+  });
+
+  it("should only mark 'read' tools as readOnlyHint", () => {
+    for (const [name, policy] of Object.entries(TOOL_POLICIES)) {
+      if (policy.capability === "execute" || policy.capability === "write" || policy.capability === "connector") {
+        expect(policy.annotations.readOnlyHint, name).toBe(false);
+      }
+      if (policy.capability === "read") {
+        expect(policy.annotations.readOnlyHint, name).toBe(true);
+      }
+    }
+  });
+
+  it("should have all 42 tools with unique names and required schema properties", () => {
+    expect(TOOL_DEFINITIONS).toHaveLength(42);
     
     const names = TOOL_DEFINITIONS.map((t) => t.name);
     const uniqueNames = new Set(names);
@@ -33,7 +52,9 @@ describe("tool definitions", () => {
     { name: "get_run_details", required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId"] },
     { name: "get_run_actions", required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId"], optional: ["actionName"] },
     { name: "get_connections", required: ["subscriptionId", "resourceGroupName"] },
-    { name: "get_action_io", required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId", "actionName"], enums: { type: ["inputs", "outputs", "both"] } },
+    { name: "get_action_io", required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId", "actionName"], optional: ["repetitionName"], enums: { type: ["inputs", "outputs", "both"] } },
+    { name: "analyze_run_failures", required: ["subscriptionId", "resourceGroupName", "logicAppName"], optional: ["workflowName", "startTime", "endTime", "maxRuns"] },
+    { name: "extract_run_test_data", required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId"], optional: ["workflowName", "actionNames", "includeInputs", "redact", "maxPayloadBytes"] },
     { name: "search_runs", required: ["subscriptionId", "resourceGroupName", "logicAppName"], optional: ["startTime", "endTime"], enums: { status: ["Succeeded", "Failed", "Cancelled", "Running"] } },
     { name: "get_workflow_version", required: ["subscriptionId", "resourceGroupName", "logicAppName", "versionId"] },
     { name: "get_connection_details", required: ["subscriptionId", "resourceGroupName", "connectionName"] },
@@ -43,7 +64,7 @@ describe("tool definitions", () => {
     { name: "run_trigger", required: ["subscriptionId", "resourceGroupName", "logicAppName", "triggerName"], optional: ["workflowName"] },
     { name: "cancel_run", required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId"], optional: ["workflowName"] },
     { name: "resubmit_run", required: ["subscriptionId", "resourceGroupName", "logicAppName", "runId"], optional: ["workflowName"] },
-    { name: "create_workflow", required: ["subscriptionId", "resourceGroupName", "logicAppName", "definition"], optional: ["location", "workflowName", "kind"] },
+    { name: "create_workflow", required: ["subscriptionId", "resourceGroupName", "logicAppName", "definition"], optional: ["location", "workflowName", "kind", "state"] },
     { name: "update_workflow", required: ["subscriptionId", "resourceGroupName", "logicAppName", "definition"], optional: ["workflowName", "kind"] },
     { name: "delete_workflow", required: ["subscriptionId", "resourceGroupName", "logicAppName"], optional: ["workflowName"] },
     { name: "clone_workflow", required: ["subscriptionId", "resourceGroupName", "logicAppName", "targetResourceGroupName", "targetLogicAppName", "targetWorkflowName"], optional: ["targetSubscriptionId"], enums: { targetKind: ["Stateful", "Stateless"] } },

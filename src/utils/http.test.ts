@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { vfsRequest, setRetryConfig } from "./http.js";
+import { vfsRequest, setRetryConfig, armRequest, assertTrustedNextLink, vfsReadJson } from "./http.js";
 import { McpError } from "./errors.js";
 
 // Mock the token manager
@@ -285,6 +285,93 @@ describe("http", () => {
       ).rejects.toThrow(McpError);
 
       expect(callCount).toBe(3); // Initial + 2 retries, then gives up
+    });
+
+    it("should not retry non-idempotent POST on 500", async () => {
+      setRetryConfig({ maxRetries: 2, baseDelayMs: 10, maxDelayMs: 100, timeoutMs: 5000 });
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+        text: () => Promise.resolve(""),
+      });
+      await expect(armRequest("/x/run", { method: "POST" })).rejects.toThrow(McpError);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("should not retry non-idempotent POST on network errors", async () => {
+      setRetryConfig({ maxRetries: 2, baseDelayMs: 10, maxDelayMs: 100, timeoutMs: 5000 });
+      global.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+      await expect(armRequest("/x/run", { method: "POST" })).rejects.toThrow();
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("should retry non-idempotent POST on 429", async () => {
+      setRetryConfig({ maxRetries: 1, baseDelayMs: 10, maxDelayMs: 100, timeoutMs: 5000 });
+      let calls = 0;
+      global.fetch = vi.fn().mockImplementation(() => {
+        calls++;
+        if (calls === 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 429,
+            statusText: "Too Many Requests",
+            headers: new Headers({ "Retry-After": "0" }),
+            text: () => Promise.resolve(""),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve("{\"ok\":1}") });
+      });
+      await armRequest("/x/run", { method: "POST" });
+      expect(calls).toBe(2);
+    });
+
+    it("should retry idempotent POST on 500", async () => {
+      setRetryConfig({ maxRetries: 1, baseDelayMs: 10, maxDelayMs: 100, timeoutMs: 5000 });
+      let calls = 0;
+      global.fetch = vi.fn().mockImplementation(() => {
+        calls++;
+        if (calls === 1) {
+          return Promise.resolve({ ok: false, status: 500, statusText: "err", text: () => Promise.resolve("") });
+        }
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve("{}") });
+      });
+      await armRequest("/x/listCallbackUrl", { method: "POST", idempotent: true });
+      expect(calls).toBe(2);
+    });
+  });
+
+  describe("assertTrustedNextLink", () => {
+    it("accepts same-host https links", () => {
+      expect(() =>
+        assertTrustedNextLink("https://management.azure.com/next?x=1", "https://management.azure.com")
+      ).not.toThrow();
+      expect(() => assertTrustedNextLink("https://app.azurewebsites.net/runtime", "app.azurewebsites.net")).not.toThrow();
+    });
+
+    it("rejects foreign hosts, http and invalid URLs", () => {
+      expect(() => assertTrustedNextLink("https://evil.example/next", "https://management.azure.com")).toThrow(
+        /unexpected host/
+      );
+      expect(() => assertTrustedNextLink("http://management.azure.com/next", "https://management.azure.com")).toThrow();
+      expect(() => assertTrustedNextLink("not a url", "https://management.azure.com")).toThrow();
+    });
+  });
+
+  describe("vfsReadJson", () => {
+    const originalFetch = global.fetch;
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it("returns null on 404", async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: "Not Found", text: () => Promise.resolve("") });
+      expect(await vfsReadJson("h", "/p", "k")).toBeNull();
+    });
+
+    it("returns parsed JSON", async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ kind: "Stateful" }) });
+      expect(await vfsReadJson("h", "/p", "k")).toEqual({ kind: "Stateful" });
     });
   });
 });

@@ -73,7 +73,7 @@ async function getExpressionTracesConsumption(
 ): Promise<GetExpressionTracesResult> {
   const response = await armRequest<{ inputs?: ExpressionTraceEntry[] }>(
     `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Logic/workflows/${logicAppName}/runs/${runId}/actions/${actionName}/listExpressionTraces`,
-    { method: "POST", queryParams: { "api-version": "2019-05-01" } }
+    { method: "POST", queryParams: { "api-version": "2019-05-01" }, idempotent: true }
   );
 
   const traces = response.inputs ?? [];
@@ -107,7 +107,7 @@ async function getExpressionTracesStandard(
     hostname,
     `/runtime/webhooks/workflow/api/management/workflows/${workflowName}/runs/${runId}/actions/${actionName}/listExpressionTraces?api-version=2020-05-01-preview`,
     masterKey,
-    { method: "POST", body: {} }
+    { method: "POST", body: {}, idempotent: true }
   );
 
   const traces = response.inputs ?? [];

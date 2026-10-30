@@ -1,6 +1,22 @@
 # Available Tools
 
-This MCP server provides 39 tools for managing Azure Logic Apps.
+This MCP server provides 42 tools for diagnosing, documenting and managing Azure Logic Apps.
+
+## Read-only by default
+
+The server starts **read-only**. Tools that invoke, modify, or expose secrets of a live Logic App
+are hidden from `tools/list` and rejected if called, until you opt in to the capability they need.
+See [Configuration → Capabilities](CONFIGURATION.md#capabilities-read-only-by-default).
+
+| Capability | Default | Tools |
+|------------|---------|-------|
+| `read` | ✅ always on | Everything not listed below |
+| `execute` | opt-in | `run_trigger`, `resubmit_run`, `cancel_run` |
+| `write` | opt-in | `create_workflow`, `update_workflow`, `delete_workflow`, `enable_workflow`, `disable_workflow`, `clone_workflow`, `create_connection` |
+| `connector` | opt-in | `invoke_connector_operation`, active probe in `test_connection` |
+| `secrets` | opt-in | `get_trigger_callback_url` (returns a SAS-signed URL) |
+
+Each listed tool also carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can prompt for confirmation appropriately.
 
 ## Discovery & Navigation
 
@@ -25,21 +41,30 @@ This MCP server provides 39 tools for managing Azure Logic Apps.
 |------|-------------|
 | `get_workflow_triggers` | Get trigger information and execution times |
 | `get_trigger_history` | Get execution history of a specific trigger |
-| `get_trigger_callback_url` | Get callback URL for request-based triggers |
+| `get_trigger_callback_url` | Get callback URL for request-based triggers *(requires `secrets`)* |
 
 ## Run History & Debugging
 
 | Tool | Description |
 |------|-------------|
 | `list_run_history` | Get run history with optional filtering |
-| `search_runs` | Search runs with friendly parameters (status, time range, tracking ID) |
+| `search_runs` | Search runs with friendly parameters (status, time range, tracking ID); returns `skipToken` for paging |
 | `get_run_details` | Get details of a specific run |
 | `get_run_actions` | Get action execution details for a run |
-| `get_action_io` | Get actual input/output content for a run action |
+| `get_action_io` | Get actual input/output content for a run action (use `repetitionName` for a loop iteration) |
 | `get_action_repetitions` | Get iteration details for loop actions (ForEach, Until) |
 | `get_scope_repetitions` | Get execution details for scope actions (Scope, Switch, Condition) |
 | `get_action_request_history` | Get HTTP request/response details for connector actions |
 | `get_expression_traces` | Get expression evaluation traces for an action |
+
+## Failure Analysis & Test Data
+
+| Tool | Description |
+|------|-------------|
+| `analyze_run_failures` | Aggregate recent failed runs by failing action and error code, distinguishing root-cause failures from propagated `ActionFailed`/skipped ones. Good first step for "why does this keep failing?" |
+| `extract_run_test_data` | Turn a historical run into test fixtures: trigger payload, per-action mock outputs/status (shaped like the Logic Apps Automated Test SDK `TriggerMock`/`ActionMock`) and expected statuses. Redacts secrets by default; truncates payloads above `maxPayloadBytes` |
+
+> Redaction is heuristic (header/key names such as `authorization`, `password`, `*secret*`, `*token*`, SAS `sig`/`code` query parameters, connection-string keys, bearer tokens). Always review extracted data before committing it.
 
 ## Connections & Connectors
 
@@ -47,24 +72,35 @@ This MCP server provides 39 tools for managing Azure Logic Apps.
 |------|-------------|
 | `get_connections` | List API connections in a resource group |
 | `get_connection_details` | Get detailed information about a specific API connection |
-| `test_connection` | Test if an API connection is valid and healthy |
-| `create_connection` | Create a new API connection for a managed connector |
+| `test_connection` | Check whether an API connection is healthy (status-only unless `connector` is enabled, which also runs the connector's live test link) |
+| `create_connection` | Create a new API connection for a managed connector *(requires `write`)* |
 | `get_connector_swagger` | Get OpenAPI/Swagger definition for a managed connector |
-| `invoke_connector_operation` | Invoke dynamic operations to fetch schemas, tables, queues, etc. |
+| `invoke_connector_operation` | Invoke dynamic operations to fetch schemas, tables, queues, etc. *(requires `connector`)* |
 
-## Write Operations
+## Execute Operations (opt-in: `execute`)
+
+| Tool | Description |
+|------|-------------|
+| `run_trigger` | Manually fire a workflow trigger |
+| `resubmit_run` | Resubmit a previous run using its original trigger inputs |
+| `cancel_run` | Cancel a running or waiting workflow run |
+
+## Write Operations (opt-in: `write`)
 
 | Tool | Description |
 |------|-------------|
 | `enable_workflow` | Enable a disabled workflow |
 | `disable_workflow` | Disable an active workflow |
-| `run_trigger` | Manually fire a workflow trigger |
-| `cancel_run` | Cancel a running or waiting workflow run |
-| `create_workflow` | Create a new workflow (Consumption: new Logic App; Standard: new workflow) |
-| `update_workflow` | Update an existing workflow's definition |
+| `create_workflow` | Create a new workflow (Consumption: new Logic App; Standard: new workflow). Fails with `ConflictError` if it already exists; optional `state` |
+| `update_workflow` | Update an existing workflow's definition (Standard: preserves existing `kind` unless overridden) |
 | `delete_workflow` | Delete a workflow (use with caution) |
 | `clone_workflow` | Clone a Consumption Logic App to a Standard Logic App workflow |
-| `validate_clone_workflow` | Validate a Consumption Logic App can be cloned to Standard |
+
+## Migration
+
+| Tool | Description |
+|------|-------------|
+| `validate_clone_workflow` | Validate a Consumption Logic App can be cloned to Standard (read-only) |
 
 ## Host & Diagnostics (Standard SKU)
 
@@ -78,7 +114,7 @@ This MCP server provides 39 tools for managing Azure Logic Apps.
 |------|-------------|
 | `get_troubleshooting_guide` | Built-in documentation for debugging patterns |
 | `get_authoring_guide` | Workflow authoring best practices |
-| `get_reference_guide` | SKU differences and API reference |
+| `get_reference` | SKU differences and API reference |
 | `get_workflow_instructions` | Common workflow patterns and examples |
 
 ## MCP Prompts

@@ -26,6 +26,7 @@ describe("settings", () => {
     delete process.env.AZURE_CLOUD;
     delete process.env.LOGICAPPS_MCP_LOG_LEVEL;
     delete process.env.LOGICAPPS_MCP_CACHE_TTL;
+    delete process.env.LOGICAPPS_MCP_CAPABILITIES;
   });
 
   afterEach(() => {
@@ -124,6 +125,27 @@ describe("settings", () => {
       const settings = await loadSettings();
 
       expect(settings.cacheTtlSeconds).toBe(600);
+    });
+
+    it("should default to read-only capabilities", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+      expect((await loadSettings()).capabilities).toEqual(["read"]);
+    });
+
+    it("should apply capability precedence: CLI > env > config file", async () => {
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ capabilities: ["secrets"] }));
+      expect((await loadSettings()).capabilities.sort()).toEqual(["read", "secrets"]);
+
+      process.env.LOGICAPPS_MCP_CAPABILITIES = "execute";
+      expect((await loadSettings()).capabilities.sort()).toEqual(["execute", "read"]);
+
+      expect((await loadSettings({ cliCapabilities: ["write"] })).capabilities.sort()).toEqual(["read", "write"]);
+    });
+
+    it("should reject invalid capabilities", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+      process.env.LOGICAPPS_MCP_CAPABILITIES = "everything";
+      await expect(loadSettings()).rejects.toThrow(/Unknown capability/);
     });
   });
 });

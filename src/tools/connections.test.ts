@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createConnection } from "./connections.js";
+import { createConnection, testConnection } from "./connections.js";
+import { setEnabledCapabilities } from "./capabilities.js";
+import { armRequest, fetchWithRetry } from "../utils/http.js";
 
 // Mock the http module
 vi.mock("../utils/http.js", () => ({
   armRequest: vi.fn(),
+  fetchWithRetry: vi.fn(),
 }));
 
 // Mock the token manager
@@ -79,6 +82,44 @@ describe("connections", () => {
 
       const result = await createConnection("sub-123", "rg", name, "azureblob", "westus2");
       expect(result.connectionName).toBe(name);
+    });
+  });
+
+  describe("testConnection", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      vi.mocked(armRequest).mockResolvedValue({
+        id: "/c",
+        name: "conn",
+        location: "westus",
+        properties: {
+          displayName: "conn",
+          overallStatus: "Error",
+          statuses: [{ status: "Unknown" }],
+          api: { name: "office365", displayName: "Office 365", id: "/apis/office365" },
+          testLinks: [{ requestUri: "/subscriptions/s/test", method: "POST" }],
+        },
+      });
+    });
+
+    it("skips the live probe unless 'connector' is enabled", async () => {
+      setEnabledCapabilities([]);
+      const result = await testConnection("s", "rg", "conn");
+      expect(fetchWithRetry).not.toHaveBeenCalled();
+      expect(result.isValid).toBe(false);
+      expect(result.note).toContain("connector");
+    });
+
+    it("runs the live probe when 'connector' is enabled", async () => {
+      setEnabledCapabilities(["connector"]);
+      vi.mocked(fetchWithRetry).mockResolvedValue({ ok: true, status: 200 } as Response);
+      const result = await testConnection("s", "rg", "conn");
+      expect(fetchWithRetry).toHaveBeenCalledWith(
+        "https://management.azure.com/subscriptions/s/test",
+        expect.objectContaining({ method: "POST" })
+      );
+      expect(result.isValid).toBe(true);
+      setEnabledCapabilities([]);
     });
   });
 });

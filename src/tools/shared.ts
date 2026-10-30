@@ -4,6 +4,7 @@
 
 import { armRequest } from "../utils/http.js";
 import { McpError } from "../utils/errors.js";
+import { getCallerCacheKey } from "../auth/tokenManager.js";
 
 // ============================================================================
 // LRU Cache Implementation
@@ -107,8 +108,16 @@ export function setCacheTtl(ttlSeconds: number): void {
 /**
  * Generate cache key from resource identifiers (case-insensitive).
  */
-function getCacheKey(subscriptionId: string, resourceGroupName: string, logicAppName: string): string {
+function getResourceKey(subscriptionId: string, resourceGroupName: string, logicAppName: string): string {
   return `${subscriptionId}/${resourceGroupName}/${logicAppName}`.toLowerCase();
+}
+
+/**
+ * Cache key partitioned by caller identity so that cached data (notably
+ * Standard host master keys) is never shared between different callers.
+ */
+function getCacheKey(subscriptionId: string, resourceGroupName: string, logicAppName: string): string {
+  return `${getResourceKey(subscriptionId, resourceGroupName, logicAppName)}#${getCallerCacheKey()}`;
 }
 
 /**
@@ -132,7 +141,7 @@ export function clearCache(
   }
 
   const prefix = logicAppName
-    ? getCacheKey(subscriptionId, resourceGroupName ?? "", logicAppName)
+    ? `${getResourceKey(subscriptionId, resourceGroupName ?? "", logicAppName)}#`
     : `${subscriptionId}/${resourceGroupName ?? ""}`.toLowerCase();
 
   skuCache.deleteByPrefix(prefix);
@@ -297,7 +306,7 @@ async function fetchStandardAppAccessFromApi(
     ),
     armRequest<{ masterKey: string }>(
       `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}/providers/Microsoft.Web/sites/${logicAppName}/host/default/listkeys`,
-      { method: "POST", queryParams: { "api-version": "2023-01-01" } }
+      { method: "POST", queryParams: { "api-version": "2023-01-01" }, idempotent: true }
     ),
   ]);
 

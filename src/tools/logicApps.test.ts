@@ -2,9 +2,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { listLogicApps } from "./logicApps.js";
 
 // Mock the http module
-vi.mock("../utils/http.js", () => ({
-  armRequest: vi.fn(),
-}));
+vi.mock("../utils/http.js", () => {
+  const armRequest = vi.fn();
+  // Follow nextLink via the mocked armRequest so tests can script multiple pages
+  const armRequestAllPages = vi.fn(async (path: string, queryParams?: Record<string, string>) => {
+    const items: unknown[] = [];
+    let page = (await armRequest(path, { queryParams })) as { value?: unknown[]; nextLink?: string };
+    items.push(...(page?.value ?? []));
+    while (page?.nextLink) {
+      page = (await armRequest(page.nextLink, {})) as { value?: unknown[]; nextLink?: string };
+      items.push(...(page?.value ?? []));
+    }
+    return items;
+  });
+  return { armRequest, armRequestAllPages };
+});
 
 // Mock the shared module
 vi.mock("./shared.js", () => ({
@@ -243,30 +255,26 @@ describe("logicApps", () => {
       expect(result.logicApps[0].resourceGroup).toBe("my-resource-group");
     });
 
-    it("should return nextLink for pagination", async () => {
+    it("should follow nextLink across all pages", async () => {
       const { armRequest } = await import("../utils/http.js");
+      const app = (name: string) => ({
+        id: `/subscriptions/sub-123/resourceGroups/rg1/providers/Microsoft.Logic/workflows/${name}`,
+        name,
+        location: "eastus",
+        properties: { state: "Enabled" },
+      });
 
       vi.mocked(armRequest)
         .mockResolvedValueOnce({
-          value: [
-            {
-              id: "/subscriptions/sub-123/resourceGroups/rg1/providers/Microsoft.Logic/workflows/app1",
-              name: "app1",
-              location: "eastus",
-              properties: { state: "Enabled" },
-            },
-          ],
+          value: [app("app1")],
           nextLink: "https://management.azure.com/nextpage?skiptoken=abc123",
         })
-        .mockResolvedValueOnce({
-          value: [],
-          nextLink: "https://management.azure.com/nextpage?skiptoken=def456",
-        });
+        .mockResolvedValueOnce({ value: [app("app2")] });
 
-      const result = await listLogicApps("sub-123");
+      const result = await listLogicApps("sub-123", undefined, "consumption");
 
-      expect(result.consumptionNextLink).toBe("https://management.azure.com/nextpage?skiptoken=abc123");
-      expect(result.standardNextLink).toBe("https://management.azure.com/nextpage?skiptoken=def456");
+      expect(result.logicApps.map((a) => a.name)).toEqual(["app1", "app2"]);
+      expect(armRequest).toHaveBeenCalledTimes(2);
     });
   });
 });

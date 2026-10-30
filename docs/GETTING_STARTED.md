@@ -53,6 +53,11 @@ az login
 
 ### Step 3: Configure Your AI Assistant
 
+> **Read-only by default.** With the configurations below, the server can inspect workflows,
+> run history and action I/O, analyze failures and extract test data, but it **cannot** run
+> triggers, resubmit/cancel runs, change workflows, or reveal callback URLs. To allow those, see
+> [Enabling write operations](#enabling-write-operations).
+
 #### GitHub Copilot in VS Code
 
 1. Install [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) and GitHub Copilot Chat extensions
@@ -107,12 +112,59 @@ Or if installed globally:
 
 Restart Claude Desktop after saving.
 
+#### Enabling write operations
+
+Opt in to only the capabilities you need by adding `--allow` to `args`:
+
+| Capability | Allows |
+|------------|--------|
+| `execute` | `run_trigger`, `resubmit_run`, `cancel_run` |
+| `write` | create/update/delete/enable/disable/clone workflows, `create_connection` |
+| `connector` | `invoke_connector_operation`, live probe in `test_connection` |
+| `secrets` | `get_trigger_callback_url` |
+| `all` | Everything above |
+
+VS Code (`.vscode/mcp.json`), allowing workflow edits and re-running runs:
+
+```json
+{
+  "servers": {
+    "logicapps": {
+      "type": "stdio",
+      "command": "logicapps-mcp",
+      "args": ["--allow", "write,execute"]
+    }
+  }
+}
+```
+
+Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "logicapps": {
+      "command": "npx",
+      "args": ["-y", "logicapps-mcp", "--allow", "write,execute"]
+    }
+  }
+}
+```
+
+Alternatively set `"env": { "LOGICAPPS_MCP_CAPABILITIES": "write,execute" }` in the server entry, or
+`"capabilities"` in `~/.logicapps-mcp/config.json`. Restart/reload the client afterwards. Your Azure
+identity still needs the matching RBAC role (e.g. `Logic App Contributor`). See
+[Configuration → Capabilities](CONFIGURATION.md#capabilities-read-only-by-default).
+
 ### Step 4: Test It
 
 Try these prompts:
 - "List my Azure subscriptions"
 - "Show Logic Apps in subscription xyz"
 - "What workflows failed in the last 24 hours?"
+
+If you ask for a change (e.g. "disable this workflow") while read-only, the assistant will report
+that the `write` capability is disabled and how to enable it.
 
 ## Cloud MCP Server Setup
 
@@ -139,6 +191,17 @@ This creates:
 - **Function App** - Hosts the MCP server
 - **Storage Account** - Required for Functions runtime
 - **Application Insights** - Telemetry and monitoring
+
+The deployed server is also **read-only by default**. To enable additional capabilities for all
+callers, set the `LOGICAPPS_MCP_CAPABILITIES` app setting and restart:
+
+```bash
+az functionapp config appsettings set -g my-rg -n <your-app> \
+  --settings LOGICAPPS_MCP_CAPABILITIES=write,execute
+```
+
+Each caller's own token still determines what they can do in Azure; capabilities only control
+which tools the server exposes.
 
 ### Step 2: Test the Deployment
 

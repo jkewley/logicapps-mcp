@@ -12,11 +12,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerToolsAndPrompts } from "../server.js";
 import { loadSettings } from "../config/index.js";
-import { setSettings, initializeAuth } from "../auth/index.js";
+import { setSettings, initializeAuth, runWithToken } from "../auth/index.js";
+import { setEnabledCapabilities } from "../tools/capabilities.js";
 import { setCacheTtl } from "../tools/index.js";
 import { VERSION } from "../version.js";
 
 let initialized = false;
+let cliCapabilities: string[] = [];
 
 /**
  * Initialize auth and settings (called once on cold start).
@@ -24,9 +26,10 @@ let initialized = false;
 async function ensureInitialized(): Promise<void> {
   if (initialized) return;
 
-  const settings = await loadSettings();
+  const settings = await loadSettings({ cliCapabilities });
   setSettings(settings);
   setCacheTtl(settings.cacheTtlSeconds);
+  setEnabledCapabilities(settings.capabilities);
   await initializeAuth();
   initialized = true;
 }
@@ -58,7 +61,10 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
     });
 
     await mcpServer.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+
+    // Passthrough auth: scope the caller's bearer token to this request only
+    const bearerToken = req.headers.authorization?.replace(/^Bearer\s+/i, "") || undefined;
+    await runWithToken(bearerToken, () => transport.handleRequest(req, res, req.body));
 
     res.on("close", () => {
       transport.close();
@@ -119,7 +125,13 @@ export function createMcpApp(): express.Application {
 /**
  * Start standalone HTTP server (for local testing).
  */
-export async function startHttpServer(port: number = 3000): Promise<void> {
+export async function startHttpServer(
+  port: number = 3000,
+  allow: string[] = []
+): Promise<void> {
+  cliCapabilities = allow;
+  // Fail fast on invalid capability configuration
+  await ensureInitialized();
   const app = createMcpApp();
 
   app.listen(port, () => {

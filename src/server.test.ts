@@ -122,5 +122,48 @@ describe("server", () => {
       const tool = result.tools.find((t) => t.name === "list_logic_apps");
       expect(tool).toBeDefined();
     });
+
+    it("should hide opt-in tools by default (read-only)", async () => {
+      const { setEnabledCapabilities } = await import("./tools/capabilities.js");
+      setEnabledCapabilities([]);
+      const handler = toolHandlers.get(ListToolsRequestSchema);
+      const result = (await handler!()) as {
+        tools: Array<{ name: string; annotations?: { readOnlyHint?: boolean } }>;
+      };
+      const names = result.tools.map((t) => t.name);
+
+      for (const gated of [
+        "run_trigger",
+        "resubmit_run",
+        "cancel_run",
+        "create_workflow",
+        "update_workflow",
+        "delete_workflow",
+        "enable_workflow",
+        "disable_workflow",
+        "clone_workflow",
+        "create_connection",
+        "invoke_connector_operation",
+        "get_trigger_callback_url",
+      ]) {
+        expect(names).not.toContain(gated);
+      }
+      expect(names).toContain("analyze_run_failures");
+      expect(names).toContain("extract_run_test_data");
+      expect(result.tools.every((t) => t.annotations?.readOnlyHint === true)).toBe(true);
+    });
+
+    it("should expose opted-in tools with annotations", async () => {
+      const { setEnabledCapabilities } = await import("./tools/capabilities.js");
+      setEnabledCapabilities(["write"]);
+      const handler = toolHandlers.get(ListToolsRequestSchema);
+      const result = (await handler!()) as {
+        tools: Array<{ name: string; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }>;
+      };
+      const del = result.tools.find((t) => t.name === "delete_workflow");
+      expect(del?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+      expect(result.tools.find((t) => t.name === "run_trigger")).toBeUndefined();
+      setEnabledCapabilities([]);
+    });
   });
 });

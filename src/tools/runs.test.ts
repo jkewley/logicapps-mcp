@@ -2,11 +2,26 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { listRunHistory, getRunDetails, getRunActions, resubmitRun } from "./runs.js";
 
 // Mock the http module
-vi.mock("../utils/http.js", () => ({
-  armRequest: vi.fn(),
-  armRequestVoid: vi.fn(),
-  workflowMgmtRequest: vi.fn(),
-}));
+vi.mock("../utils/http.js", () => {
+  const armRequest = vi.fn();
+  const workflowMgmtRequest = vi.fn();
+  type Page = { value?: unknown[]; nextLink?: string };
+  const armRequestAllPages = vi.fn(async (path: string, queryParams?: Record<string, string>) => {
+    const page = (await armRequest(path, { queryParams })) as Page;
+    return page?.value ?? [];
+  });
+  const workflowMgmtRequestAllPages = vi.fn(async (host: string, path: string, key: string) => {
+    const page = (await workflowMgmtRequest(host, path, key)) as Page;
+    return page?.value ?? [];
+  });
+  return {
+    armRequest,
+    armRequestVoid: vi.fn(),
+    armRequestAllPages,
+    workflowMgmtRequest,
+    workflowMgmtRequestAllPages,
+  };
+});
 
 // Mock the shared module
 vi.mock("./shared.js", () => ({

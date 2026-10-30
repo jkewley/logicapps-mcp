@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { TOOL_DEFINITIONS } from "./tools/definitions.js";
 import { handleToolCall } from "./tools/handler.js";
+import { isToolEnabled, getToolAnnotations } from "./tools/capabilities.js";
 
 const LOGIC_APPS_GUIDE = `# Azure Logic Apps MCP Server Guide
 
@@ -23,10 +24,16 @@ Logic Apps come in two SKUs with different APIs:
 - Always specify \`workflowName\` parameter
 - Stateful and Stateless workflow types
 
+## Capabilities
+The server is read-only by default. Tools that run, change, or reveal secrets of live workflows
+only appear when the user opts in (\`--allow execute|write|connector|secrets\` or
+LOGICAPPS_MCP_CAPABILITIES). If a needed tool is missing, explain which capability enables it.
+
 ## Common Workflows
 
 ### 1. Debug a Failed Run
 \`\`\`
+analyze_run_failures → recurring failures grouped by root-cause action/error
 list_run_history → find the failed run
 get_run_details → see error summary  
 get_run_actions → find which action failed
@@ -41,11 +48,17 @@ get_workflow_definition → get current definition
 update_workflow → deploy changes
 \`\`\`
 
-### 3. Test Changes
+### 3. Test Changes (requires write + execute)
 \`\`\`
 update_workflow → deploy
-run_trigger → execute manually
+run_trigger or resubmit_run → execute
 list_run_history → check result
+\`\`\`
+
+### 3b. Build Test Data for Modernization
+\`\`\`
+search_runs / analyze_run_failures → pick representative runs (success + each failure type)
+extract_run_test_data → redacted trigger/action mocks and expected statuses per run
 \`\`\`
 
 ### 4. Investigate Loop Iterations
@@ -60,6 +73,8 @@ get_action_io with repetitionName → get specific iteration data
 | Need | Tool |
 |------|------|
 | Find runs by date/status | \`search_runs\` |
+| Recurring failure causes | \`analyze_run_failures\` |
+| Test fixtures from a real run | \`extract_run_test_data\` |
 | Get all runs | \`list_run_history\` |
 | See action inputs/outputs | \`get_action_io\` |
 | Debug foreach loops | \`get_action_repetitions\` |
@@ -748,14 +763,25 @@ Multiple statuses (error handling):
 \`\`\`
 `;
 
+/**
+ * Tool definitions allowed by the current capability policy, with MCP annotations attached.
+ */
+export function getEnabledToolDefinitions() {
+  return TOOL_DEFINITIONS.filter((t) => isToolEnabled(t.name)).map((t) => ({
+    ...t,
+    annotations: getToolAnnotations(t.name),
+  }));
+}
+
 export function registerToolsAndPrompts(mcpServer: McpServer): void {
   // Use underlying server for tools (JSON Schema-based definitions)
   // This is the recommended approach for advanced usage per McpServer docs
   const server = mcpServer.server;
 
   // List available tools
+  // List available tools, hiding any tool whose capability has not been opted into
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS,
+    tools: getEnabledToolDefinitions(),
   }));
 
   // Handle tool calls

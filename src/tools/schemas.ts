@@ -138,6 +138,29 @@ export const getActionIOSchema = z.object({
   actionName,
   workflowName: workflowName.optional(),
   type: z.enum(["inputs", "outputs", "both"]).optional(),
+  repetitionName: z.string().min(1).optional(),
+});
+
+export const analyzeRunFailuresSchema = z.object({
+  subscriptionId,
+  resourceGroupName,
+  logicAppName,
+  workflowName: workflowName.optional(),
+  startTime: z.string().optional(),
+  endTime: z.string().optional(),
+  maxRuns: z.number().int().min(1).max(50).optional(),
+});
+
+export const extractRunTestDataSchema = z.object({
+  subscriptionId,
+  resourceGroupName,
+  logicAppName,
+  runId,
+  workflowName: workflowName.optional(),
+  actionNames: z.array(z.string().min(1)).optional(),
+  includeInputs: z.boolean().optional(),
+  redact: z.boolean().optional(),
+  maxPayloadBytes: z.number().int().min(1024).max(1048576).optional(),
 });
 
 export const searchRunsSchema = z.object({
@@ -321,6 +344,7 @@ export const createWorkflowSchema = z.object({
       })
     )
     .optional(),
+  state: z.enum(["Enabled", "Disabled"]).optional(),
 });
 
 export const updateWorkflowSchema = z.object({
@@ -415,6 +439,8 @@ export const TOOL_SCHEMAS: Record<string, z.ZodSchema> = {
   get_run_actions: getRunActionsSchema,
   get_action_io: getActionIOSchema,
   search_runs: searchRunsSchema,
+  analyze_run_failures: analyzeRunFailuresSchema,
+  extract_run_test_data: extractRunTestDataSchema,
   cancel_run: cancelRunSchema,
   resubmit_run: resubmitRunSchema,
   get_trigger_history: getTriggerHistorySchema,
